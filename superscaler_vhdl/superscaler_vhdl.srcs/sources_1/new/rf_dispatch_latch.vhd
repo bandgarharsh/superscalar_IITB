@@ -6,8 +6,16 @@ entity rf_dispatch_latch is
     Port (
         clk : in std_logic;
         rst : in std_logic;
+        
+        -- ==========================================
+        -- Pipeline Control (NEW)
+        -- ==========================================
+        stall : in std_logic; -- From dispatch_stage
+        flush : in std_logic; -- From ROB (Branch Mispredict)
 
-        -- Instruction information
+        -- ==========================================
+        -- Instruction Information
+        -- ==========================================
         pc1_in : in std_logic_vector(15 downto 0);
         pc2_in : in std_logic_vector(15 downto 0);
 
@@ -23,207 +31,173 @@ entity rf_dispatch_latch is
         cz_bits1_in : in std_logic_vector(1 downto 0);
         cz_bits2_in : in std_logic_vector(1 downto 0);
 
-        -- Destination
+        -- ==========================================
+        -- Destinations
+        -- ==========================================
         dest_tag1_in : in std_logic_vector(4 downto 0);
         dest_tag2_in : in std_logic_vector(4 downto 0);
+        
+        dest_flag1_in : in std_logic_vector(4 downto 0); -- NEW
+        dest_flag2_in : in std_logic_vector(4 downto 0); -- NEW
 
         we_dest1_in : in std_logic;
         we_dest2_in : in std_logic;
 
+        -- ==========================================
         -- Source Tags
+        -- ==========================================
         tag_rs1_in : in std_logic_vector(4 downto 0);
         tag_rt1_in : in std_logic_vector(4 downto 0);
+        tag_flag1_in : in std_logic_vector(4 downto 0); -- NEW
+        
         tag_rs2_in : in std_logic_vector(4 downto 0);
         tag_rt2_in : in std_logic_vector(4 downto 0);
+        tag_flag2_in : in std_logic_vector(4 downto 0); -- NEW
 
-        -- Source Data
+        -- ==========================================
+        -- Source Data (From PRF)
+        -- ==========================================
         data_rs1_in : in std_logic_vector(15 downto 0);
         data_rt1_in : in std_logic_vector(15 downto 0);
+        data_flag1_in : in std_logic_vector(1 downto 0); -- NEW
+        
         data_rs2_in : in std_logic_vector(15 downto 0);
         data_rt2_in : in std_logic_vector(15 downto 0);
+        data_flag2_in : in std_logic_vector(1 downto 0); -- NEW
 
-        -- Valid bits
+        -- ==========================================
+        -- Valid bits (From Global Valid Table)
+        -- ==========================================
         valid_rs1_in : in std_logic;
         valid_rt1_in : in std_logic;
+        valid_flag1_in : in std_logic; -- NEW
+        
         valid_rs2_in : in std_logic;
         valid_rt2_in : in std_logic;
+        valid_flag2_in : in std_logic; -- NEW
 
-        -- Outputs
+        -- ==========================================
+        -- LATCHED OUTPUTS (To Reservation Stations)
+        -- ==========================================
         pc1_out : out std_logic_vector(15 downto 0);
         pc2_out : out std_logic_vector(15 downto 0);
-
         op1_out : out std_logic_vector(3 downto 0);
         op2_out : out std_logic_vector(3 downto 0);
-
         imm1_out : out std_logic_vector(15 downto 0);
         imm2_out : out std_logic_vector(15 downto 0);
-
         comp_bit1_out : out std_logic;
         comp_bit2_out : out std_logic;
-
         cz_bits1_out : out std_logic_vector(1 downto 0);
         cz_bits2_out : out std_logic_vector(1 downto 0);
 
         dest_tag1_out : out std_logic_vector(4 downto 0);
         dest_tag2_out : out std_logic_vector(4 downto 0);
-
+        dest_flag1_out : out std_logic_vector(4 downto 0); -- NEW
+        dest_flag2_out : out std_logic_vector(4 downto 0); -- NEW
         we_dest1_out : out std_logic;
         we_dest2_out : out std_logic;
 
+        -- Formatted Payloads (Data OR Tag)
         payload_rs1 : out std_logic_vector(15 downto 0);
         payload_rt1 : out std_logic_vector(15 downto 0);
+        payload_flag1 : out std_logic_vector(4 downto 0); -- Extended to 5 to hold either 2-bit data or 5-bit tag
+        
         payload_rs2 : out std_logic_vector(15 downto 0);
         payload_rt2 : out std_logic_vector(15 downto 0);
+        payload_flag2 : out std_logic_vector(4 downto 0); -- NEW
 
         is_tag_rs1 : out std_logic;
         is_tag_rt1 : out std_logic;
+        is_tag_flag1 : out std_logic; -- NEW
+        
         is_tag_rs2 : out std_logic;
-        is_tag_rt2 : out std_logic
+        is_tag_rt2 : out std_logic;
+        is_tag_flag2 : out std_logic  -- NEW
     );
 end rf_dispatch_latch;
 
 architecture Behavioral of rf_dispatch_latch is
 
-    signal pc1_reg, pc2_reg : std_logic_vector(15 downto 0);
-    signal op1_reg, op2_reg : std_logic_vector(3 downto 0);
-    signal imm1_reg, imm2_reg : std_logic_vector(15 downto 0);
-
-    signal comp1_reg, comp2_reg : std_logic;
-    signal cz1_reg, cz2_reg : std_logic_vector(1 downto 0);
-
-    signal dest1_reg, dest2_reg : std_logic_vector(4 downto 0);
-    signal we1_reg, we2_reg : std_logic;
-
-    signal prs1_reg, prt1_reg : std_logic_vector(15 downto 0);
-    signal prs2_reg, prt2_reg : std_logic_vector(15 downto 0);
-
-    signal tagrs1_reg, tagrt1_reg : std_logic;
-    signal tagrs2_reg, tagrt2_reg : std_logic;
+    -- (Internal registers omitted for brevity, mapping directly to ports in process)
 
 begin
 
-    process(clk,rst)
+    process(clk, rst)
     begin
-        if rst='1' then
-
-            pc1_reg <= (others=>'0');
-            pc2_reg <= (others=>'0');
-
-            op1_reg <= (others=>'0');
-            op2_reg <= (others=>'0');
-
-            imm1_reg <= (others=>'0');
-            imm2_reg <= (others=>'0');
-
-            comp1_reg <= '0';
-            comp2_reg <= '0';
-
-            cz1_reg <= (others=>'0');
-            cz2_reg <= (others=>'0');
-
-            dest1_reg <= (others=>'0');
-            dest2_reg <= (others=>'0');
-
-            we1_reg <= '0';
-            we2_reg <= '0';
-
-            prs1_reg <= (others=>'0');
-            prt1_reg <= (others=>'0');
-            prs2_reg <= (others=>'0');
-            prt2_reg <= (others=>'0');
-
-            tagrs1_reg <= '0';
-            tagrt1_reg <= '0';
-            tagrs2_reg <= '0';
-            tagrt2_reg <= '0';
+        if rst = '1' then
+            -- Reset all outputs to 0
+            pc1_out <= (others=>'0'); pc2_out <= (others=>'0');
+            op1_out <= (others=>'0'); op2_out <= (others=>'0');
+            imm1_out <= (others=>'0'); imm2_out <= (others=>'0');
+            comp_bit1_out <= '0'; comp_bit2_out <= '0';
+            cz_bits1_out <= (others=>'0'); cz_bits2_out <= (others=>'0');
+            dest_tag1_out <= (others=>'0'); dest_tag2_out <= (others=>'0');
+            dest_flag1_out <= (others=>'0'); dest_flag2_out <= (others=>'0');
+            we_dest1_out <= '0'; we_dest2_out <= '0';
+            payload_rs1 <= (others=>'0'); payload_rt1 <= (others=>'0'); payload_flag1 <= (others=>'0');
+            payload_rs2 <= (others=>'0'); payload_rt2 <= (others=>'0'); payload_flag2 <= (others=>'0');
+            is_tag_rs1 <= '0'; is_tag_rt1 <= '0'; is_tag_flag1 <= '0';
+            is_tag_rs2 <= '0'; is_tag_rt2 <= '0'; is_tag_flag2 <= '0';
 
         elsif rising_edge(clk) then
+        
+            if flush = '1' then
+                -- Clear latch immediately on branch mispredict
+                we_dest1_out <= '0'; 
+                we_dest2_out <= '0';
+                
+            elsif stall = '0' then
+                
+                -- Only accept new data if the RS queues are NOT stalled
+                pc1_out <= pc1_in; pc2_out <= pc2_in;
+                op1_out <= op1_in; op2_out <= op2_in;
+                imm1_out <= imm1_in; imm2_out <= imm2_in;
+                comp_bit1_out <= comp_bit1_in; comp_bit2_out <= comp_bit2_in;
+                cz_bits1_out <= cz_bits1_in; cz_bits2_out <= cz_bits2_in;
+                dest_tag1_out <= dest_tag1_in; dest_tag2_out <= dest_tag2_in;
+                dest_flag1_out <= dest_flag1_in; dest_flag2_out <= dest_flag2_in;
+                we_dest1_out <= we_dest1_in; we_dest2_out <= we_dest2_in;
 
-            pc1_reg <= pc1_in;
-            pc2_reg <= pc2_in;
+                -- SLOT 1 PAYLOADS
+                if valid_rs1_in = '1' then
+                    payload_rs1 <= data_rs1_in; is_tag_rs1 <= '0';
+                else
+                    payload_rs1 <= "00000000000" & tag_rs1_in; is_tag_rs1 <= '1';
+                end if;
 
-            op1_reg <= op1_in;
-            op2_reg <= op2_in;
+                if valid_rt1_in = '1' then
+                    payload_rt1 <= data_rt1_in; is_tag_rt1 <= '0';
+                else
+                    payload_rt1 <= "00000000000" & tag_rt1_in; is_tag_rt1 <= '1';
+                end if;
+                
+                if valid_flag1_in = '1' then
+                    payload_flag1 <= "000" & data_flag1_in; is_tag_flag1 <= '0';
+                else
+                    payload_flag1 <= tag_flag1_in; is_tag_flag1 <= '1';
+                end if;
 
-            imm1_reg <= imm1_in;
-            imm2_reg <= imm2_in;
+                -- SLOT 2 PAYLOADS
+                if valid_rs2_in = '1' then
+                    payload_rs2 <= data_rs2_in; is_tag_rs2 <= '0';
+                else
+                    payload_rs2 <= "00000000000" & tag_rs2_in; is_tag_rs2 <= '1';
+                end if;
 
-            comp1_reg <= comp_bit1_in;
-            comp2_reg <= comp_bit2_in;
+                if valid_rt2_in = '1' then
+                    payload_rt2 <= data_rt2_in; is_tag_rt2 <= '0';
+                else
+                    payload_rt2 <= "00000000000" & tag_rt2_in; is_tag_rt2 <= '1';
+                end if;
+                
+                if valid_flag2_in = '1' then
+                    payload_flag2 <= "000" & data_flag2_in; is_tag_flag2 <= '0';
+                else
+                    payload_flag2 <= tag_flag2_in; is_tag_flag2 <= '1';
+                end if;
 
-            cz1_reg <= cz_bits1_in;
-            cz2_reg <= cz_bits2_in;
-
-            dest1_reg <= dest_tag1_in;
-            dest2_reg <= dest_tag2_in;
-
-            we1_reg <= we_dest1_in;
-            we2_reg <= we_dest2_in;
-
-            if valid_rs1_in='1' then
-                prs1_reg <= data_rs1_in;
-                tagrs1_reg <= '0';
-            else
-                prs1_reg <= "00000000000" & tag_rs1_in;
-                tagrs1_reg <= '1';
             end if;
-
-            if valid_rt1_in='1' then
-                prt1_reg <= data_rt1_in;
-                tagrt1_reg <= '0';
-            else
-                prt1_reg <= "00000000000" & tag_rt1_in;
-                tagrt1_reg <= '1';
-            end if;
-
-            if valid_rs2_in='1' then
-                prs2_reg <= data_rs2_in;
-                tagrs2_reg <= '0';
-            else
-                prs2_reg <= "00000000000" & tag_rs2_in;
-                tagrs2_reg <= '1';
-            end if;
-
-            if valid_rt2_in='1' then
-                prt2_reg <= data_rt2_in;
-                tagrt2_reg <= '0';
-            else
-                prt2_reg <= "00000000000" & tag_rt2_in;
-                tagrt2_reg <= '1';
-            end if;
-
         end if;
     end process;
-
-    pc1_out <= pc1_reg;
-    pc2_out <= pc2_reg;
-
-    op1_out <= op1_reg;
-    op2_out <= op2_reg;
-
-    imm1_out <= imm1_reg;
-    imm2_out <= imm2_reg;
-
-    comp_bit1_out <= comp1_reg;
-    comp_bit2_out <= comp2_reg;
-
-    cz_bits1_out <= cz1_reg;
-    cz_bits2_out <= cz2_reg;
-
-    dest_tag1_out <= dest1_reg;
-    dest_tag2_out <= dest2_reg;
-
-    we_dest1_out <= we1_reg;
-    we_dest2_out <= we2_reg;
-
-    payload_rs1 <= prs1_reg;
-    payload_rt1 <= prt1_reg;
-    payload_rs2 <= prs2_reg;
-    payload_rt2 <= prt2_reg;
-
-    is_tag_rs1 <= tagrs1_reg;
-    is_tag_rt1 <= tagrt1_reg;
-    is_tag_rs2 <= tagrs2_reg;
-    is_tag_rt2 <= tagrt2_reg;
 
 end Behavioral;

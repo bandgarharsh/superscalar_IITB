@@ -2,47 +2,31 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- =================================================================================
--- Entity: branch_rs
--- Description: 4-slot Reservation Station dedicated to Control Flow instructions 
---              (BEQ, BLT, JAL, JLR, etc.). Snoops the CDB and issues to a 
---              dedicated Branch Execution Unit to minimize misprediction penalties.
--- =================================================================================
 entity branch_rs is
     Port (
         clk         : in std_logic;
         rst         : in std_logic;
-        flush       : in std_logic; -- Global flush from ROB on misprediction
+        flush       : in std_logic; 
 
-        -- --- 1. DISPATCH INTERFACE (Writing to RS) ---
-        we          : in std_logic;
-        alloc_idx   : in std_logic_vector(1 downto 0);
-        d_opcode    : in std_logic_vector(3 downto 0);
-        d_pc        : in std_logic_vector(15 downto 0);  -- Required for PC+Imm math
-        d_imm       : in std_logic_vector(15 downto 0);  -- Sign-extended offset
-        d_dest_pr   : in std_logic_vector(4 downto 0);   -- For JAL/JLR linking
-        d_rob_tag   : in std_logic_vector(4 downto 0);
+        -- --- DISPATCH INTERFACE ---
+        we1         : in std_logic;
+        rs_packet1  : in std_logic_vector(63 downto 0);
+        rob_tag1    : in std_logic_vector(4 downto 0);
+        d1_vj_valid : in std_logic; d1_vj_data  : in std_logic_vector(15 downto 0);
+        d1_vk_valid : in std_logic; d1_vk_data  : in std_logic_vector(15 downto 0);
 
-        -- Operand 1 (RA - e.g., first value to compare, or Jump base address)
-        d_vj_valid  : in std_logic;
-        d_vj_data   : in std_logic_vector(15 downto 0);
-        d_qj_tag    : in std_logic_vector(4 downto 0);
+        we2         : in std_logic;
+        rs_packet2  : in std_logic_vector(63 downto 0);
+        rob_tag2    : in std_logic_vector(4 downto 0);
+        d2_vj_valid : in std_logic; d2_vj_data  : in std_logic_vector(15 downto 0);
+        d2_vk_valid : in std_logic; d2_vk_data  : in std_logic_vector(15 downto 0);
 
-        -- Operand 2 (RB - e.g., second value to compare)
-        d_vk_valid  : in std_logic;
-        d_vk_data   : in std_logic_vector(15 downto 0);
-        d_qk_tag    : in std_logic_vector(4 downto 0);
+        -- --- COMMON DATA BUS INTERFACE ---
+        cdb1_valid  : in std_logic; cdb1_tag : in std_logic_vector(4 downto 0); cdb1_data : in std_logic_vector(15 downto 0);
+        cdb2_valid  : in std_logic; cdb2_tag : in std_logic_vector(4 downto 0); cdb2_data : in std_logic_vector(15 downto 0);
 
-        -- --- 2. COMMON DATA BUS INTERFACE (Snooping) ---
-        cdb1_valid  : in std_logic;
-        cdb1_tag    : in std_logic_vector(4 downto 0);
-        cdb1_data   : in std_logic_vector(15 downto 0);
-
-        cdb2_valid  : in std_logic;
-        cdb2_tag    : in std_logic_vector(4 downto 0);
-        cdb2_data   : in std_logic_vector(15 downto 0);
-
-        -- --- 3. ISSUE INTERFACE (To Branch Execution Unit) ---
+        -- --- ISSUE INTERFACE ---
+        issue_ready   : in std_logic; -- 4. NEW: Handshake from Branch ALU
         issue_valid   : out std_logic;
         issue_opcode  : out std_logic_vector(3 downto 0);
         issue_pc      : out std_logic_vector(15 downto 0);
@@ -52,160 +36,171 @@ entity branch_rs is
         issue_dest_pr : out std_logic_vector(4 downto 0);
         issue_rob_tag : out std_logic_vector(4 downto 0);
 
-        -- Status to Dispatcher
-        busy_slots    : out std_logic_vector(3 downto 0)
+        free_slots    : out unsigned(2 downto 0) -- 1. CHANGED: Precise capacity out
     );
 end branch_rs;
 
 architecture Behavioral of branch_rs is
-
-    -- Internal Array Types for the 4 slots
     type bit_array    is array (0 to 3) of std_logic;
     type opcode_array is array (0 to 3) of std_logic_vector(3 downto 0);
     type tag_array    is array (0 to 3) of std_logic_vector(4 downto 0);
     type data_array   is array (0 to 3) of std_logic_vector(15 downto 0);
+    type age_array    is array (0 to 3) of unsigned(3 downto 0);
 
-    -- Reservation Station Slot Registers
     signal busy      : bit_array := (others => '0');
     signal opcode    : opcode_array := (others => (others => '0'));
     signal pc        : data_array := (others => (others => '0'));
     signal imm       : data_array := (others => (others => '0'));
     signal dest_pr   : tag_array := (others => (others => '0'));
     signal rob_tag   : tag_array := (others => (others => '0'));
+    signal age       : age_array := (others => (others => '0'));
 
-    signal vj_valid  : bit_array := (others => '0');
-    signal vj        : data_array := (others => (others => '0'));
-    signal qj        : tag_array := (others => (others => '0'));
+    signal vj_valid  : bit_array := (others => '0'); signal vj : data_array := (others => (others => '0')); signal qj : tag_array := (others => (others => '0'));
+    signal vk_valid  : bit_array := (others => '0'); signal vk : data_array := (others => (others => '0')); signal qk : tag_array := (others => (others => '0'));
 
-    signal vk_valid  : bit_array := (others => '0');
-    signal vk        : data_array := (others => (others => '0'));
-    signal qk        : tag_array := (others => (others => '0'));
-
-    -- Internal signals for issue logic
+    signal uses_vk     : bit_array;
     signal ready       : bit_array;
     signal int_issue_v : std_logic;
     signal int_issue_i : integer range 0 to 3;
+    
+    signal count       : integer range 0 to 4 := 0; -- 2. NEW: Active entry counter
 
 begin
+    
+    free_slots <= to_unsigned(4 - count, 3); -- 1. Output precisely how many slots are free
 
-    -- Output busy vector so Dispatch knows which slots are occupied
-    busy_slots <= busy(3) & busy(2) & busy(1) & busy(0);
+    -- 6. VERIFIED OPERAND SELECTIVITY: BEQ(1000), BLT/BLE(1001) use Vk. Jumps bypass it.
+    uses_vk(0) <= '1' when (opcode(0) = "1000" or opcode(0) = "1001") else '0';
+    uses_vk(1) <= '1' when (opcode(1) = "1000" or opcode(1) = "1001") else '0';
+    uses_vk(2) <= '1' when (opcode(2) = "1000" or opcode(2) = "1001") else '0';
+    uses_vk(3) <= '1' when (opcode(3) = "1000" or opcode(3) = "1001") else '0';
 
-    -- -------------------------------------------------------------------------
-    -- Combinational Logic: Ready Flags
-    -- A branch is ready when its slot is busy and both required operands are valid
-    -- -------------------------------------------------------------------------
-    ready(0) <= busy(0) and vj_valid(0) and vk_valid(0);
-    ready(1) <= busy(1) and vj_valid(1) and vk_valid(1);
-    ready(2) <= busy(2) and vj_valid(2) and vk_valid(2);
-    ready(3) <= busy(3) and vj_valid(3) and vk_valid(3);
+    ready(0) <= busy(0) and vj_valid(0) and (not uses_vk(0) or vk_valid(0));
+    ready(1) <= busy(1) and vj_valid(1) and (not uses_vk(1) or vk_valid(1));
+    ready(2) <= busy(2) and vj_valid(2) and (not uses_vk(2) or vk_valid(2));
+    ready(3) <= busy(3) and vj_valid(3) and (not uses_vk(3) or vk_valid(3));
 
-    -- -------------------------------------------------------------------------
-    -- Combinational Logic: Priority Encoder (Oldest ready branch wins)
-    -- -------------------------------------------------------------------------
-    process(ready, opcode, pc, imm, vj, vk, dest_pr, rob_tag)
+    -- Priority Encoder (Strict Age-Based Issue)
+    process(ready, age, opcode, pc, imm, vj, vk, dest_pr, rob_tag)
+        variable max_age : unsigned(3 downto 0);
+        variable best_i  : integer range 0 to 3;
+        variable found   : boolean;
     begin
-        -- Default assignments (no issue)
-        int_issue_v   <= '0';
-        int_issue_i   <= 0;
-        issue_valid   <= '0';
-        issue_opcode  <= (others => '0');
-        issue_pc      <= (others => '0');
-        issue_imm     <= (others => '0');
-        issue_vj      <= (others => '0');
-        issue_vk      <= (others => '0');
-        issue_dest_pr <= (others => '0');
-        issue_rob_tag <= (others => '0');
+        int_issue_v <= '0'; int_issue_i <= 0; issue_valid <= '0';
+        issue_opcode <= (others => '0'); issue_pc <= (others => '0'); issue_imm <= (others => '0');
+        issue_vj <= (others => '0'); issue_vk <= (others => '0'); issue_dest_pr <= (others => '0'); issue_rob_tag <= (others => '0');
+        
+        max_age := "0000"; best_i := 0; found := false;
+        for i in 0 to 3 loop
+            if ready(i) = '1' then
+                if not found or (age(i) > max_age) then
+                    max_age := age(i); best_i := i; found := true;
+                end if;
+            end if;
+        end loop;
 
-        if ready(0) = '1' then
-            int_issue_v <= '1'; int_issue_i <= 0; issue_valid <= '1';
-            issue_opcode <= opcode(0); issue_pc <= pc(0); issue_imm <= imm(0);
-            issue_vj <= vj(0); issue_vk <= vk(0); 
-            issue_dest_pr <= dest_pr(0); issue_rob_tag <= rob_tag(0);
-        elsif ready(1) = '1' then
-            int_issue_v <= '1'; int_issue_i <= 1; issue_valid <= '1';
-            issue_opcode <= opcode(1); issue_pc <= pc(1); issue_imm <= imm(1);
-            issue_vj <= vj(1); issue_vk <= vk(1); 
-            issue_dest_pr <= dest_pr(1); issue_rob_tag <= rob_tag(1);
-        elsif ready(2) = '1' then
-            int_issue_v <= '1'; int_issue_i <= 2; issue_valid <= '1';
-            issue_opcode <= opcode(2); issue_pc <= pc(2); issue_imm <= imm(2);
-            issue_vj <= vj(2); issue_vk <= vk(2); 
-            issue_dest_pr <= dest_pr(2); issue_rob_tag <= rob_tag(2);
-        elsif ready(3) = '1' then
-            int_issue_v <= '1'; int_issue_i <= 3; issue_valid <= '1';
-            issue_opcode <= opcode(3); issue_pc <= pc(3); issue_imm <= imm(3);
-            issue_vj <= vj(3); issue_vk <= vk(3); 
-            issue_dest_pr <= dest_pr(3); issue_rob_tag <= rob_tag(3);
+        if found then
+            int_issue_v <= '1'; int_issue_i <= best_i; issue_valid <= '1';
+            issue_opcode <= opcode(best_i); issue_pc <= pc(best_i); issue_imm <= imm(best_i);
+            issue_vj <= vj(best_i); issue_vk <= vk(best_i); 
+            issue_dest_pr <= dest_pr(best_i); issue_rob_tag <= rob_tag(best_i);
         end if;
     end process;
 
-    -- -------------------------------------------------------------------------
-    -- Sequential Logic: Dispatch, CDB Snooping, Issue Clearing, and Flushes
-    -- -------------------------------------------------------------------------
     process(clk, rst, flush)
-        variable a_idx : integer range 0 to 3;
+        variable alloc1, alloc2 : integer range 0 to 4;
+        variable actually_issued: std_logic;
+        variable slot_free      : boolean;
+        variable pushes, pops   : integer range 0 to 2;
     begin
-        -- When a branch misprediction occurs, the ROB sends a flush signal.
-        -- We instantly clear every single slot by forcing busy bits to 0.
         if rst = '1' or flush = '1' then
             busy <= (others => '0');
-            
+            age  <= (others => (others => '0'));
+            count <= 0; -- 7. Reset count on flush
         elsif rising_edge(clk) then
             
-            a_idx := to_integer(unsigned(alloc_idx));
-
-            -- 1. CLEAR ISSUED INSTRUCTION
-            if int_issue_v = '1' then
-                busy(int_issue_i) <= '0';
-            end if;
-
-            -- 2. DISPATCH (Allocate new branch)
-            if we = '1' then
-                busy(a_idx)      <= '1';
-                opcode(a_idx)    <= d_opcode;
-                pc(a_idx)        <= d_pc;
-                imm(a_idx)       <= d_imm;
-                dest_pr(a_idx)   <= d_dest_pr;
-                rob_tag(a_idx)   <= d_rob_tag;
-                
-                vj_valid(a_idx)  <= d_vj_valid;
-                vj(a_idx)        <= d_vj_data;
-                qj(a_idx)        <= d_qj_tag;
-                
-                vk_valid(a_idx)  <= d_vk_valid;
-                vk(a_idx)        <= d_vk_data;
-                qk(a_idx)        <= d_qk_tag;
-            end if;
-
-            -- 3. CDB SNOOPING (Listen for missing operands)
+            pops := 0; pushes := 0;
+            
+            -- 3 & 4. Confirm ALU handshake before popping
+            actually_issued := int_issue_v and issue_ready;
+            
             for i in 0 to 3 loop
-                if busy(i) = '1' then
-                    
-                    -- Check Operand J against CDB 1 and 2
-                    if vj_valid(i) = '0' then
-                        if cdb1_valid = '1' and qj(i) = cdb1_tag then
-                            vj(i) <= cdb1_data;
-                            vj_valid(i) <= '1';
-                        elsif cdb2_valid = '1' and qj(i) = cdb2_tag then
-                            vj(i) <= cdb2_data;
-                            vj_valid(i) <= '1';
-                        end if;
-                    end if;
+                if busy(i) = '1' and age(i) /= "1111" then age(i) <= age(i) + 1; end if;
+            end loop;
 
-                    -- Check Operand K against CDB 1 and 2
-                    if vk_valid(i) = '0' then
-                        if cdb1_valid = '1' and qk(i) = cdb1_tag then
-                            vk(i) <= cdb1_data;
-                            vk_valid(i) <= '1';
-                        elsif cdb2_valid = '1' and qk(i) = cdb2_tag then
-                            vk(i) <= cdb2_data;
-                            vk_valid(i) <= '1';
-                        end if;
+            if actually_issued = '1' then 
+                busy(int_issue_i) <= '0'; 
+                pops := 1;
+            end if;
+
+            -- SELF-ALLOCATION: Exclude alloc1 from alloc2, account for same-cycle pop
+            alloc1 := 4; alloc2 := 4;
+            for i in 0 to 3 loop
+                slot_free := (busy(i) = '0') or (busy(i) = '1' and actually_issued = '1' and int_issue_i = i);
+                
+                if slot_free then
+                    if we1 = '1' and alloc1 = 4 then 
+                        alloc1 := i;
+                    elsif we2 = '1' and alloc2 = 4 and i /= alloc1 then -- 5. Prevent alloc2 = alloc1
+                        alloc2 := i;
+                    end if;
+                end if;
+            end loop;
+
+            -- DISPATCH & SAME-CYCLE SNOOPING (Slot 1)
+            if alloc1 /= 4 then
+                pushes := pushes + 1;
+                busy(alloc1)      <= '1'; age(alloc1) <= "0000";
+                opcode(alloc1)    <= rs_packet1(63 downto 60);
+                dest_pr(alloc1)   <= rs_packet1(59 downto 55);
+                qj(alloc1)        <= rs_packet1(49 downto 45); qk(alloc1) <= rs_packet1(44 downto 40);
+                imm(alloc1)       <= rs_packet1(34 downto 19); pc(alloc1) <= rs_packet1(15 downto 0);
+                rob_tag(alloc1)   <= rob_tag1;
+                
+                if d1_vj_valid = '0' and cdb1_valid = '1' and rs_packet1(49 downto 45) = cdb1_tag then vj(alloc1) <= cdb1_data; vj_valid(alloc1) <= '1';
+                elsif d1_vj_valid = '0' and cdb2_valid = '1' and rs_packet1(49 downto 45) = cdb2_tag then vj(alloc1) <= cdb2_data; vj_valid(alloc1) <= '1';
+                else vj_valid(alloc1) <= d1_vj_valid; vj(alloc1) <= d1_vj_data; end if;
+
+                if d1_vk_valid = '0' and cdb1_valid = '1' and rs_packet1(44 downto 40) = cdb1_tag then vk(alloc1) <= cdb1_data; vk_valid(alloc1) <= '1';
+                elsif d1_vk_valid = '0' and cdb2_valid = '1' and rs_packet1(44 downto 40) = cdb2_tag then vk(alloc1) <= cdb2_data; vk_valid(alloc1) <= '1';
+                else vk_valid(alloc1) <= d1_vk_valid; vk(alloc1) <= d1_vk_data; end if;
+            end if;
+
+            -- DISPATCH & SAME-CYCLE SNOOPING (Slot 2)
+            if alloc2 /= 4 then
+                pushes := pushes + 1;
+                busy(alloc2)      <= '1'; age(alloc2) <= "0000";
+                opcode(alloc2)    <= rs_packet2(63 downto 60);
+                dest_pr(alloc2)   <= rs_packet2(59 downto 55);
+                qj(alloc2)        <= rs_packet2(49 downto 45); qk(alloc2) <= rs_packet2(44 downto 40);
+                imm(alloc2)       <= rs_packet2(34 downto 19); pc(alloc2) <= rs_packet2(15 downto 0);
+                rob_tag(alloc2)   <= rob_tag2;
+                
+                if d2_vj_valid = '0' and cdb1_valid = '1' and rs_packet2(49 downto 45) = cdb1_tag then vj(alloc2) <= cdb1_data; vj_valid(alloc2) <= '1';
+                elsif d2_vj_valid = '0' and cdb2_valid = '1' and rs_packet2(49 downto 45) = cdb2_tag then vj(alloc2) <= cdb2_data; vj_valid(alloc2) <= '1';
+                else vj_valid(alloc2) <= d2_vj_valid; vj(alloc2) <= d2_vj_data; end if;
+
+                if d2_vk_valid = '0' and cdb1_valid = '1' and rs_packet2(44 downto 40) = cdb1_tag then vk(alloc2) <= cdb1_data; vk_valid(alloc2) <= '1';
+                elsif d2_vk_valid = '0' and cdb2_valid = '1' and rs_packet2(44 downto 40) = cdb2_tag then vk(alloc2) <= cdb2_data; vk_valid(alloc2) <= '1';
+                else vk_valid(alloc2) <= d2_vk_valid; vk(alloc2) <= d2_vk_data; end if;
+            end if;
+
+            -- 3. Update the global active entry count
+            count <= count + pushes - pops;
+
+            -- STANDARD CDB SNOOPING
+            for i in 0 to 3 loop
+                if (busy(i) = '1' and (alloc1 /= i) and (alloc2 /= i)) then
+                    if (vj_valid(i) = '0') then
+                        if (cdb1_valid = '1' and qj(i) = cdb1_tag) then vj(i) <= cdb1_data; vj_valid(i) <= '1';
+                        elsif (cdb2_valid = '1' and qj(i) = cdb2_tag) then vj(i) <= cdb2_data; vj_valid(i) <= '1'; end if;
+                    end if;
+                    if (vk_valid(i) = '0') then
+                        if (cdb1_valid = '1' and qk(i) = cdb1_tag) then vk(i) <= cdb1_data; vk_valid(i) <= '1';
+                        elsif (cdb2_valid = '1' and qk(i) = cdb2_tag) then vk(i) <= cdb2_data; vk_valid(i) <= '1'; end if;
                     end if;
                 end if;
             end loop;
         end if;
     end process;
-
 end Behavioral;

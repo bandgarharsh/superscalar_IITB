@@ -1,0 +1,16 @@
+# Vivado generated files
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.runs/
+
+# Generated simulation files
+xsim.dir/
+webtalk/
+webtalk.log
+
+# Editor/system files
+*.swp
+*.swo
+.DS_Store

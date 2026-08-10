@@ -5,6 +5,9 @@ entity instruction_fetch is
     Port (
         clk        : in  std_logic;
         rst        : in  std_logic;
+        
+        stall_fetch: in  std_logic;  -- ADDED: Stall signal from ID stage
+        
         pc_bran    : in  std_logic_vector(15 downto 0);
         sel        : in  std_logic_vector(1 downto 0);
 
@@ -60,18 +63,24 @@ begin
     -- Next PC Selection
     ------------------------------------------------------------------
 
-    process(sel, pc_4, pc_bran, pc_int)
+    -- ADDED stall_fetch to the sensitivity list
+    process(sel, pc_4, pc_bran, pc_int, stall_fetch)
     begin
-        case sel is
-            when "00" =>
-                pc_in <= pc_4;
+        -- PRIORITY: If stalled, freeze the PC where it is!
+        if stall_fetch = '1' then
+            pc_in <= pc_int;
+        else
+            case sel is
+                when "00" =>
+                    pc_in <= pc_4;
 
-            when "01" =>
-                pc_in <= pc_bran;
+                when "01" =>
+                    pc_in <= pc_bran;
 
-            when others =>
-                pc_in <= pc_int;
-        end case;
+                when others =>
+                    pc_in <= pc_int;
+            end case;
+        end if;
     end process;
 
     pc <= pc_int;
