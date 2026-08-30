@@ -1,5 +1,6 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
 
 entity instruction_fetch is
     Port (
@@ -13,7 +14,18 @@ entity instruction_fetch is
 
         instruct1  : out std_logic_vector(15 downto 0);
         instruct2  : out std_logic_vector(15 downto 0);
-        pc         : out std_logic_vector(15 downto 0)
+        
+        pc1_out         : out std_logic_vector(15 downto 0);
+        pc2_out         : out std_logic_vector(15 downto 0);
+        
+        valid1      : out std_logic;
+        valid2      : out std_logic;
+        
+        pred_taken1 : out std_logic;
+        pred_target1 : out std_logic_vector(15 downto 0);
+        
+        pred_taken2 : out std_logic;
+        pred_target2 : out std_logic_vector(15 downto 0)
     );
 end instruction_fetch;
 
@@ -22,7 +34,9 @@ architecture Behavioral of instruction_fetch is
     signal pc_in  : std_logic_vector(15 downto 0);
     signal pc_4   : std_logic_vector(15 downto 0);
     signal pc_int : std_logic_vector(15 downto 0);
-
+    
+    signal instruct1_s  :  std_logic_vector(15 downto 0);
+    signal instruct2_s  :  std_logic_vector(15 downto 0);
 begin
 
     ------------------------------------------------------------------
@@ -53,10 +67,9 @@ begin
 
     instru_Mem : entity work.instru_mem
         port map(
-            clk       => clk,
             addr      => pc_int,
-            instruct1 => instruct1,
-            instruct2 => instruct2
+            instruct1 => instruct1_s,
+            instruct2 => instruct2_s
         );
 
     ------------------------------------------------------------------
@@ -64,25 +77,41 @@ begin
     ------------------------------------------------------------------
 
     -- ADDED stall_fetch to the sensitivity list
+    ------------------------------------------------------------------
+    -- PURE COMBINATIONAL LOGIC: Next PC Selection
+    ------------------------------------------------------------------
     process(sel, pc_4, pc_bran, pc_int, stall_fetch)
     begin
-        -- PRIORITY: If stalled, freeze the PC where it is!
-        if stall_fetch = '1' then
+        -- PRIORITY 1: A Pipeline Flush ALWAYS overrides a Stall!
+        if sel = "01" then
+            pc_in <= pc_bran(15 downto 0);
+            
+        -- PRIORITY 2: If stalled, freeze the PC where it is!
+        elsif stall_fetch = '1' then
             pc_in <= pc_int;
+            
+        -- PRIORITY 3: Normal Fetching
         else
             case sel is
                 when "00" =>
                     pc_in <= pc_4;
-
-                when "01" =>
-                    pc_in <= pc_bran;
-
                 when others =>
                     pc_in <= pc_int;
             end case;
         end if;
+        if rising_edge(clk) then
+            if rst = '0' and stall_fetch = '0' then
+                report "[X-RAY FETCH] PC: " & integer'image(to_integer(unsigned(pc_int))) & 
+                       " | Inst1: " & integer'image(to_integer(unsigned(instruct1_s))) & 
+                       " | Inst2: " & integer'image(to_integer(unsigned(instruct2_s)));
+            end if;
+        end if;
     end process;
 
-    pc <= pc_int;
-
+    pc1_out <= pc_int;
+    pc2_out <= std_logic_vector(unsigned(pc_int) + 2);
+    instruct1 <= instruct1_s;
+    instruct2 <= instruct2_s;
+    valid1 <= '1' when rst = '0' else '0';
+    valid2 <= '1' when rst = '0' else '0';
 end Behavioral;

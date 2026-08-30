@@ -1,76 +1,71 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+use work.iitb_risc_pkg.ALL;
 
 entity IF_ID is
     Port (
-        clk         : in  std_logic;
-        rst         : in  std_logic;
+        clk          : in  std_logic;
+        rst          : in  std_logic;
+        flush        : in  std_logic; -- Pipeline flush on mispredict
+        stall_fetch  : in  std_logic; -- Hold state when downstream stalls
 
-        -- Control Signals from ID_stage
-        stall_fetch : in  std_logic;
-        slide_inst2 : in  std_logic;
+        -- Inputs from Fetch Stage
+        valid1_in    : in  std_logic;
+        valid2_in    : in  std_logic;
+        pc1_in       : in  std_logic_vector(15 downto 0);
+        pc2_in       : in  std_logic_vector(15 downto 0);
+        instruct1_in : in  std_logic_vector(15 downto 0);
+        instruct2_in : in  std_logic_vector(15 downto 0);
 
-        -- Data from Fetch Stage
-        pc          : in  std_logic_vector(15 downto 0);
-        instruct1   : in  std_logic_vector(15 downto 0);
-        instruct2   : in  std_logic_vector(15 downto 0);
-
-        -- Data to Decode Stage
-        instruct1_o : out std_logic_vector(15 downto 0);
-        instruct2_o : out std_logic_vector(15 downto 0);
-        pc_1o       : out std_logic_vector(15 downto 0);
-        pc_2o       : out std_logic_vector(15 downto 0)
+        -- Outputs to Decode Stage
+        valid1_out   : out std_logic;
+        valid2_out   : out std_logic;
+        pc1_out      : out std_logic_vector(15 downto 0);
+        pc2_out      : out std_logic_vector(15 downto 0);
+        instruct1_out: out std_logic_vector(15 downto 0);
+        instruct2_out: out std_logic_vector(15 downto 0)
     );
 end IF_ID;
 
 architecture Behavioral of IF_ID is
-
-    signal instruct1_reg : std_logic_vector(15 downto 0);
-    signal instruct2_reg : std_logic_vector(15 downto 0);
-    signal pc1_reg       : std_logic_vector(15 downto 0);
-    signal pc2_reg       : std_logic_vector(15 downto 0);
-
+    signal valid1_reg, valid2_reg       : std_logic;
+    signal pc1_reg, pc2_reg             : std_logic_vector(15 downto 0);
+    signal instruct1_reg, instruct2_reg : std_logic_vector(15 downto 0);
 begin
 
     process(clk, rst)
     begin
         if rst = '1' then
-
-            instruct1_reg <= (others => '0');
-            instruct2_reg <= (others => '0');
+            valid1_reg    <= '0';
+            valid2_reg    <= '0';
             pc1_reg       <= (others => '0');
             pc2_reg       <= (others => '0');
-
+            instruct1_reg <= (others => '0');
+            instruct2_reg <= (others => '0');
         elsif rising_edge(clk) then
-
-            -- PRIORITY 1: SLIDE SLOT 2 INTO SLOT 1
-            if slide_inst2 = '1' then
-                instruct1_reg <= instruct2_reg;
-                pc1_reg       <= pc2_reg;
-                
-                -- Insert a bubble into Slot 2 so it doesn't execute twice!
-                instruct2_reg <= (others => '0');
-                
-            -- PRIORITY 2: FREEZE THE PIPELINE
-            elsif stall_fetch = '1' then
-                -- Do nothing. The registers will hold their current values.
-                null;
-                
-            -- PRIORITY 3: NORMAL FETCH
-            else
-                instruct1_reg <= instruct1;
-                instruct2_reg <= instruct2;
-                pc1_reg       <= pc;
-                pc2_reg       <= std_logic_vector(unsigned(pc) + 2);
+            if flush = '1' then
+                -- Convert pipeline entries into bubbles on flush
+                valid1_reg <= '0';
+                valid2_reg <= '0';
+            elsif stall_fetch = '0' then
+                -- Normal pipeline advance
+                valid1_reg    <= valid1_in;
+                valid2_reg    <= valid2_in;
+                pc1_reg       <= pc1_in;
+                pc2_reg       <= pc2_in;
+                instruct1_reg <= instruct1_in;
+                instruct2_reg <= instruct2_in;
             end if;
-
+            -- If stall_fetch = '1', registers maintain current state
         end if;
     end process;
 
-    instruct1_o <= instruct1_reg;
-    instruct2_o <= instruct2_reg;
-    pc_1o       <= pc1_reg;
-    pc_2o       <= pc2_reg;
+    valid1_out    <= valid1_reg;
+    valid2_out    <= valid2_reg;
+    pc1_out       <= pc1_reg;
+    pc2_out       <= pc2_reg;
+    instruct1_out <= instruct1_reg;
+    instruct2_out <= instruct2_reg;
 
 end Behavioral;

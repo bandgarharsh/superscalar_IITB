@@ -1,0 +1,30 @@
+# Vivado generated directories
+*.cache/
+*.runs/
+*.hw/
+*.ip_user_files/
+
+# Generated simulation output
+*.sim/
+
+# Vivado generated logs/reports
+*.jou
+*.log
+*.str
+
+# Keep source and simulation source directories
+!*.srcs/
+!*.srcs/sources_1/
+!*.srcs/sources_1/new/
+!*.srcs/sim_1/
+!*.srcs/sim_1/new/
+
+# Keep source files
+!*.vhd
+!*.vhdl
+!*.v
+!*.sv
+!*.mem
+
+# Keep text files
+!*.txt

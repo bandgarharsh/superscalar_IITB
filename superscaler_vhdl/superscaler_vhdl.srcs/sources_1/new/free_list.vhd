@@ -3,147 +3,205 @@ use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
 entity free_list is
-    Port(
-        clk : in std_logic;
-        rst : in std_logic;
+    Port (
+        clk                 : in  std_logic;
+        rst                 : in  std_logic;
+        
+        -- --- RECOVERY (From Commit Stage) ---
+        flush               : in  std_logic;
+        commit_gpr_mask     : in  std_logic_vector(31 downto 0);
+        commit_flag_mask    : in  std_logic_vector(31 downto 0);
 
-        -- --- MISPREDICTION RECOVERY ---
-        flush         : in std_logic;
-        rrat_map_flat : in std_logic_vector(44 downto 0); -- 9 registers * 5 bits
+        -- ==========================================
+        -- GPR ALLOCATION (To Rename)
+        -- ==========================================
+        req_gpr1            : in  std_logic;
+        req_gpr2            : in  std_logic;
+        alloc_gpr1          : out std_logic_vector(4 downto 0);
+        alloc_gpr2          : out std_logic_vector(4 downto 0);
+        avail_gprs          : out unsigned(1 downto 0); -- UPDATED: Outputs 0, 1, or 2+
 
-        -- 4 Independent Requests (Combinational inputs)
-        req_gpr1  : in std_logic;
-        req_flag1 : in std_logic;
-        req_gpr2  : in std_logic;
-        req_flag2 : in std_logic;
+        -- ==========================================
+        -- FLAG ALLOCATION (To Rename)
+        -- ==========================================
+        req_flag1           : in  std_logic;
+        req_flag2           : in  std_logic;
+        alloc_flag1         : out std_logic_vector(4 downto 0);
+        alloc_flag2         : out std_logic_vector(4 downto 0);
+        avail_flags         : out unsigned(1 downto 0); -- UPDATED: Outputs 0, 1, or 2+
 
-        -- 4 Independent PR Allocations
-        free_gpr1  : out std_logic_vector(4 downto 0);
-        free_flag1 : out std_logic_vector(4 downto 0);
-        free_gpr2  : out std_logic_vector(4 downto 0);
-        free_flag2 : out std_logic_vector(4 downto 0);
+        -- ==========================================
+        -- DEALLOCATION (From Commit Stage)
+        -- ==========================================
+        free_gpr1_en        : in  std_logic;
+        free_gpr1_tag       : in  std_logic_vector(4 downto 0);
+        free_gpr2_en        : in  std_logic;
+        free_gpr2_tag       : in  std_logic_vector(4 downto 0);
 
-        empty_stall : out std_logic;
-
-        -- 4 Independent Push Requests (From ROB Retirement)
-        push_gpr1  : in std_logic; freed_gpr1  : in std_logic_vector(4 downto 0);
-        push_flag1 : in std_logic; freed_flag1 : in std_logic_vector(4 downto 0);
-        push_gpr2  : in std_logic; freed_gpr2  : in std_logic_vector(4 downto 0);
-        push_flag2 : in std_logic; freed_flag2 : in std_logic_vector(4 downto 0)
+        free_flag1_en       : in  std_logic;
+        free_flag1_tag      : in  std_logic_vector(4 downto 0);
+        free_flag2_en       : in  std_logic;
+        free_flag2_tag      : in  std_logic_vector(4 downto 0)
     );
 end free_list;
 
 architecture Behavioral of free_list is
 
-    type fifo_array is array (0 to 31) of std_logic_vector(4 downto 0);
-    signal fifo : fifo_array;
+    -- 1 = Free, 0 = Allocated
+    signal gpr_mask  : std_logic_vector(31 downto 0);
+    signal flag_mask : std_logic_vector(31 downto 0);
 
-    signal head  : unsigned(4 downto 0);
-    signal tail  : unsigned(4 downto 0);
-    signal count : unsigned(5 downto 0);
-
-    signal empty_stall_s : std_logic;
-    signal num_reqs : integer range 0 to 4;
-    signal p1, p2, p3, p4 : integer range 0 to 1;
+    -- Internal signals for the priority encoders
+    signal gpr_idx1, gpr_idx2   : integer range 0 to 31;
+    signal flag_idx1, flag_idx2 : integer range 0 to 31;
+    signal gpr_avail1, gpr_avail2   : boolean;
+    signal flag_avail1, flag_avail2 : boolean;
 
 begin
 
-    p1 <= 1 when req_gpr1 = '1' else 0;
-    p2 <= 1 when req_flag1 = '1' else 0;
-    p3 <= 1 when req_gpr2 = '1' else 0;
-    p4 <= 1 when req_flag2 = '1' else 0;
-    
-    num_reqs <= p1 + p2 + p3 + p4;
+    -- =================================================================
+    -- 1. COMBINATIONAL PRIORITY ENCODERS (Scan right-to-left)
+    -- =================================================================
+    process(gpr_mask, flag_mask)
+        variable v_gpr_idx1, v_gpr_idx2   : integer range 0 to 31;
+        variable v_flag_idx1, v_flag_idx2 : integer range 0 to 31;
+        variable v_gpr_found1, v_gpr_found2   : boolean;
+        variable v_flag_found1, v_flag_found2 : boolean;
+    begin
+        -- Initialize
+        v_gpr_found1 := false; v_gpr_found2 := false;
+        v_flag_found1 := false; v_flag_found2 := false;
+        v_gpr_idx1 := 0; v_gpr_idx2 := 0;
+        v_flag_idx1 := 0; v_flag_idx2 := 0;
 
-    free_gpr1  <= fifo(to_integer(head));
-    free_flag1 <= fifo(to_integer(head + p1));
-    free_gpr2  <= fifo(to_integer(head + p1 + p2));
-    free_flag2 <= fifo(to_integer(head + p1 + p2 + p3));
+        -- Scan GPR Mask for the first two '1's
+        for i in 0 to 31 loop
+            if gpr_mask(i) = '1' then
+                if not v_gpr_found1 then
+                    v_gpr_idx1 := i;
+                    v_gpr_found1 := true;
+                elsif not v_gpr_found2 then
+                    v_gpr_idx2 := i;
+                    v_gpr_found2 := true;
+                end if;
+            end if;
+        end loop;
 
-    empty_stall_s <= '1' when count < to_unsigned(num_reqs, 6) else '0';
-    empty_stall   <= empty_stall_s;
+        -- Scan Flag Mask for the first two '1's
+        for i in 0 to 31 loop
+            if flag_mask(i) = '1' then
+                if not v_flag_found1 then
+                    v_flag_idx1 := i;
+                    v_flag_found1 := true;
+                elsif not v_flag_found2 then
+                    v_flag_idx2 := i;
+                    v_flag_found2 := true;
+                end if;
+            end if;
+        end loop;
 
-    process(clk, rst)
-        variable active_pops   : integer range 0 to 4;
-        variable push_offset   : integer range 0 to 4;
-        variable cnt           : integer range -4 to 63;
+        -- Map variables to signals
+        gpr_idx1 <= v_gpr_idx1; gpr_idx2 <= v_gpr_idx2;
+        gpr_avail1 <= v_gpr_found1; gpr_avail2 <= v_gpr_found2;
+
+        flag_idx1 <= v_flag_idx1; flag_idx2 <= v_flag_idx2;
+        flag_avail1 <= v_flag_found1; flag_avail2 <= v_flag_found2;
+    end process;
+
+    -- Assign Tag outputs
+    alloc_gpr1 <= std_logic_vector(to_unsigned(gpr_idx1, 5));
+    alloc_gpr2 <= std_logic_vector(to_unsigned(gpr_idx2, 5));
+    alloc_flag1 <= std_logic_vector(to_unsigned(flag_idx1, 5));
+    alloc_flag2 <= std_logic_vector(to_unsigned(flag_idx2, 5));
+
+    -- =================================================================
+    -- 2. RESOURCE COUNTING (New Logic to replace 'empty')
+    -- =================================================================
+    -- This converts the boolean "found" flags into a 2-bit unsigned number
+    -- that the top-level RR_stage can use for its Atomic Handshake.
+    process(gpr_avail1, gpr_avail2, flag_avail1, flag_avail2)
+    begin
+        -- GPR Count
+        if gpr_avail2 then
+            avail_gprs <= "10"; -- 2 or more available
+        elsif gpr_avail1 then
+            avail_gprs <= "01"; -- exactly 1 available
+        else
+            avail_gprs <= "00"; -- 0 available
+        end if;
         
-        -- Flush Rebuild Variables
-        variable is_allocated  : boolean;
-        variable rebuild_count : integer range 0 to 32;
+        -- Flag Count
+        if flag_avail2 then
+            avail_flags <= "10";
+        elsif flag_avail1 then
+            avail_flags <= "01";
+        else
+            avail_flags <= "00";
+        end if;
+    end process;
+
+
+    -- =================================================================
+    -- 3. SEQUENTIAL NEXT-STATE LOGIC (Update the masks)
+    -- =================================================================
+    process(clk, rst)
+        variable next_gpr_mask  : std_logic_vector(31 downto 0);
+        variable next_flag_mask : std_logic_vector(31 downto 0);
     begin
         if rst = '1' then
-            for i in 0 to 22 loop
-                fifo(i) <= std_logic_vector(to_unsigned(i + 9,5));
-            end loop;
-            head  <= to_unsigned(0,5);
-            tail  <= to_unsigned(23,5);
-            count <= to_unsigned(23,6);
+            -- At reset: P0-P7 are mapped to R0-R7 (Busy = 0). P8-P31 are Free (1).
+            gpr_mask <= x"FFFFFF00"; 
+            
+            -- At reset: F0 is the initial flag state (Busy = 0). F1-F31 are Free (1).
+            flag_mask <= x"FFFFFFFE";
 
         elsif rising_edge(clk) then
-            
-            -- =======================================================
-            -- FLUSH RECOVERY (1-Cycle Hardware Rebuild)
-            -- =======================================================
             if flush = '1' then
-                rebuild_count := 0;
-                
-                -- Sweep all 32 Physical Registers
-                for i in 0 to 31 loop
-                    is_allocated := false;
-                    
-                    -- Check if 'i' is currently safe inside the RRAT
-                    for j in 0 to 8 loop
-                        if to_unsigned(i, 5) = unsigned(rrat_map_flat((j*5)+4 downto j*5)) then
-                            is_allocated := true;
-                        end if;
-                    end loop;
-                    
-                    -- If it's not in the RRAT, it is free! Push it to the new FIFO.
-                    if not is_allocated then
-                        fifo(rebuild_count) <= std_logic_vector(to_unsigned(i, 5));
-                        rebuild_count := rebuild_count + 1;
-                    end if;
-                end loop;
-                
-                head <= to_unsigned(0,5);
-                tail <= to_unsigned(rebuild_count, 5);
-                count <= to_unsigned(rebuild_count, 6);
-                
-            -- =======================================================
-            -- NORMAL OPERATION
-            -- =======================================================
+                -- Instant recovery from branch mispredict
+                gpr_mask  <= commit_gpr_mask;
+                flag_mask <= commit_flag_mask;
             else
-                active_pops := 0;
-                if empty_stall_s = '0' then
-                    active_pops := num_reqs;
-                    head <= head + to_unsigned(active_pops, 5);
+                -- Start with current masks
+                next_gpr_mask  := gpr_mask;
+                next_flag_mask := flag_mask;
+
+                -- A. Process Allocations (Set bits to 0)
+                -- Because the RR_stage passes 'dispatch_fire' into req_gpr1/2,
+                -- we will ONLY clear these bits if the bundle was fully accepted!
+                if req_gpr1 = '1' and gpr_avail1 then
+                    next_gpr_mask(gpr_idx1) := '0';
+                end if;
+                if req_gpr2 = '1' and gpr_avail2 then
+                    next_gpr_mask(gpr_idx2) := '0';
                 end if;
 
-                push_offset := 0;
-                if push_gpr1 = '1' then
-                    fifo(to_integer(tail + to_unsigned(push_offset, 5))) <= freed_gpr1;
-                    push_offset := push_offset + 1;
+                if req_flag1 = '1' and flag_avail1 then
+                    next_flag_mask(flag_idx1) := '0';
                 end if;
-                if push_flag1 = '1' then
-                    fifo(to_integer(tail + to_unsigned(push_offset, 5))) <= freed_flag1;
-                    push_offset := push_offset + 1;
+                if req_flag2 = '1' and flag_avail2 then
+                    next_flag_mask(flag_idx2) := '0';
                 end if;
-                if push_gpr2 = '1' then
-                    fifo(to_integer(tail + to_unsigned(push_offset, 5))) <= freed_gpr2;
-                    push_offset := push_offset + 1;
-                end if;
-                if push_flag2 = '1' then
-                    fifo(to_integer(tail + to_unsigned(push_offset, 5))) <= freed_flag2;
-                    push_offset := push_offset + 1;
-                end if;
-                
-                tail <= tail + to_unsigned(push_offset, 5);
 
-                cnt := to_integer(count);
-                cnt := cnt - active_pops + push_offset;
-                count <= to_unsigned(cnt, 6);
+                -- B. Process Deallocations from Commit (Set bits to 1)
+                if free_gpr1_en = '1' then
+                    next_gpr_mask(to_integer(unsigned(free_gpr1_tag))) := '1';
+                end if;
+                if free_gpr2_en = '1' then
+                    next_gpr_mask(to_integer(unsigned(free_gpr2_tag))) := '1';
+                end if;
+
+                if free_flag1_en = '1' then
+                    next_flag_mask(to_integer(unsigned(free_flag1_tag))) := '1';
+                end if;
+                if free_flag2_en = '1' then
+                    next_flag_mask(to_integer(unsigned(free_flag2_tag))) := '1';
+                end if;
+
+                -- Update registers
+                gpr_mask  <= next_gpr_mask;
+                flag_mask <= next_flag_mask;
             end if;
         end if;
     end process;
+
 end Behavioral;

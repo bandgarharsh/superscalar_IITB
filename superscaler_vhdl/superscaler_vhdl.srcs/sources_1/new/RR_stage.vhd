@@ -4,193 +4,424 @@ use IEEE.NUMERIC_STD.ALL;
 
 entity RR_stage is
     Port (
-        clk : in std_logic;
-        rst : in std_logic;
+        clk                 : in  std_logic;
+        rst                 : in  std_logic;
+        flush               : in  std_logic;
+        stall_out           : out std_logic; 
 
-        -- Inputs from ID Stage
-        valid1_in : in std_logic; op1_in : in std_logic_vector(3 downto 0);
-        ra1_in, rb1_in, rc1_in : in std_logic_vector(2 downto 0);
-        imm1_in : in std_logic_vector(15 downto 0); cz1_in : in std_logic_vector(1 downto 0);
-        comp1_in : in std_logic; pc1_in : in std_logic_vector(15 downto 0);
-
-        valid2_in : in std_logic; op2_in : in std_logic_vector(3 downto 0);
-        ra2_in, rb2_in, rc2_in : in std_logic_vector(2 downto 0);
-        imm2_in : in std_logic_vector(15 downto 0); cz2_in : in std_logic_vector(1 downto 0);
-        comp2_in : in std_logic; pc2_in : in std_logic_vector(15 downto 0);
-
-        route_rs2, route_rt2 : in std_logic;
-
-        -- Recovery / Retirement Inputs
-        flush         : in std_logic;
-        rrat_map_flat : in std_logic_vector(44 downto 0); 
+        -- ==========================================
+        -- INPUTS FROM DECODE (ID_RF Buffer)
+        -- ==========================================
+        -- Slot 1
+        op1_valid_in        : in  std_logic;
+        pc1_in              : in  std_logic_vector(15 downto 0);
+        op1_in              : in  std_logic_vector(3 downto 0);
+        imm1_in             : in  std_logic_vector(15 downto 0);
+        comp_bit1_in        : in  std_logic;
+        cz_bits1_in         : in  std_logic_vector(1 downto 0);
         
-        -- Independent Retirement Pushes
-        rob_push_gpr1  : in std_logic; rob_freed_gpr1  : in std_logic_vector(4 downto 0);
-        rob_push_flag1 : in std_logic; rob_freed_flag1 : in std_logic_vector(4 downto 0);
-        rob_push_gpr2  : in std_logic; rob_freed_gpr2  : in std_logic_vector(4 downto 0);
-        rob_push_flag2 : in std_logic; rob_freed_flag2 : in std_logic_vector(4 downto 0);
+        src1_reg1_in        : in  std_logic_vector(2 downto 0);
+        src2_reg1_in        : in  std_logic_vector(2 downto 0);
+        dest_reg1_in        : in  std_logic_vector(2 downto 0);
+        
+        reads_rs1_1_in      : in  std_logic;
+        reads_rs2_1_in      : in  std_logic;
+        we_gpr1_in          : in  std_logic;
+        dest_is_r0_1_in     : in  std_logic;
+        we_flag1_in         : in  std_logic;
+        
+        is_alu1_in          : in  std_logic;
+        is_lsu1_in          : in  std_logic;
+        is_branch1_in       : in  std_logic;
+        is_multimem1_in     : in  std_logic;
+        is_store1_in        : in  std_logic;
+        illegal_op1_in      : in  std_logic;
+        -- predict
+        in_pred_taken1      : in std_logic;
+        in_pred_target1     : in std_logic_vector(15 downto 0);
+        
+        -- Slot 2
+        op2_valid_in        : in  std_logic;
+        pc2_in              : in  std_logic_vector(15 downto 0);
+        op2_in              : in  std_logic_vector(3 downto 0);
+        imm2_in             : in  std_logic_vector(15 downto 0);
+        comp_bit2_in        : in  std_logic;
+        cz_bits2_in         : in  std_logic_vector(1 downto 0);
+        
+        src1_reg2_in        : in  std_logic_vector(2 downto 0);
+        src2_reg2_in        : in  std_logic_vector(2 downto 0);
+        dest_reg2_in        : in  std_logic_vector(2 downto 0);
+        
+        reads_rs1_2_in      : in  std_logic;
+        reads_rs2_2_in      : in  std_logic;
+        we_gpr2_in          : in  std_logic;
+        dest_is_r0_2_in     : in  std_logic;
+        we_flag2_in         : in  std_logic;
+        
+        is_alu2_in          : in  std_logic;
+        is_lsu2_in          : in  std_logic;
+        is_branch2_in       : in  std_logic;
+        is_multimem2_in     : in  std_logic;
+        is_store2_in        : in  std_logic;
+        illegal_op2_in      : in  std_logic;
+        -- predict 
+        in_pred_taken2      : in std_logic;
+        in_pred_target2     : in std_logic_vector(15 downto 0);
+        -- ==========================================
+        -- INPUTS FROM ROB & COMMIT
+        -- ==========================================
+        rob_tail_id1_in     : in  std_logic_vector(3 downto 0);
+        rob_tail_id2_in     : in  std_logic_vector(3 downto 0);
+        rob_free_count      : in  unsigned(4 downto 0); 
 
-        -- Outputs to Dispatch Stage
-        rr_stall  : out std_logic; 
+        commit_rat_flat     : in  std_logic_vector(39 downto 0);
+        commit_flag_tag     : in  std_logic_vector(4 downto 0);
+        commit_gpr_mask     : in  std_logic_vector(31 downto 0);
+        commit_flag_mask    : in  std_logic_vector(31 downto 0);
 
-        valid1_out, we_flag1_out : out std_logic;
-        op1_out : out std_logic_vector(3 downto 0);
-        p_ra1, p_flag1_dest, p_rb1, p_rc1, pr_flag1, old_p_ra1, old_pr_flag1 : out std_logic_vector(4 downto 0);
-        imm1_out : out std_logic_vector(15 downto 0); cz1_out : out std_logic_vector(1 downto 0);
-        comp1_out : out std_logic; pc1_out : out std_logic_vector(15 downto 0);
+        -- Free List Deallocation
+        free_gpr1_en        : in  std_logic;
+        free_gpr1_tag       : in  std_logic_vector(4 downto 0);
+        free_gpr2_en        : in  std_logic;
+        free_gpr2_tag       : in  std_logic_vector(4 downto 0);
+        free_f1_en          : in  std_logic;
+        free_f1_tag         : in  std_logic_vector(4 downto 0);
+        free_f2_en          : in  std_logic;
+        free_f2_tag         : in  std_logic_vector(4 downto 0);
 
-        valid2_out, we_flag2_out : out std_logic;
-        op2_out : out std_logic_vector(3 downto 0);
-        p_ra2, p_flag2_dest, p_rb2, p_rc2, pr_flag2, old_p_ra2, old_pr_flag2 : out std_logic_vector(4 downto 0);
-        imm2_out : out std_logic_vector(15 downto 0); cz2_out : out std_logic_vector(1 downto 0);
-        comp2_out : out std_logic; pc2_out : out std_logic_vector(15 downto 0)
+        -- Writeback / CDB
+        wb_gpr1_en, wb_gpr2_en, wb_gpr3_en : in std_logic;
+        wb_gpr1_tag, wb_gpr2_tag, wb_gpr3_tag : in std_logic_vector(4 downto 0);
+        wb_f1_en, wb_f2_en : in std_logic;
+        wb_f1_tag, wb_f2_tag : in std_logic_vector(4 downto 0);
+
+        -- ==========================================
+        -- OUTPUTS TO DISPATCH ROUTER & RS
+        -- ==========================================
+        -- Slot 1 Bundle
+        dispatch_valid1_out : out std_logic; -- Tells RS to accept data
+        pc1_out             : out std_logic_vector(15 downto 0);
+        op1_out             : out std_logic_vector(3 downto 0);
+        imm1_out            : out std_logic_vector(15 downto 0);
+        comp_bit1_out       : out std_logic;
+        cz_bits1_out        : out std_logic_vector(1 downto 0);
+        
+        reads_rs1_1_out     : out std_logic;
+        reads_rs2_1_out     : out std_logic;
+        dest_is_r0_1_out    : out std_logic;
+        we_gpr1_out         : out std_logic;
+        we_flag1_out        : out std_logic;
+        
+        is_alu1_out         : out std_logic;
+        is_lsu1_out         : out std_logic;
+        is_branch1_out      : out std_logic;
+        is_multimem1_out    : out std_logic;
+        is_store1_out       : out std_logic;
+        illegal_op1_out     : out std_logic;
+        
+        prs1_out, prt1_out  : out std_logic_vector(4 downto 0);
+        prs1_rdy, prt1_rdy  : out std_logic;
+        pr_flag1_out        : out std_logic_vector(4 downto 0);
+        pr_flag1_rdy        : out std_logic;
+        pd1_new, pd1_old    : out std_logic_vector(4 downto 0); 
+        pf1_new, pf1_old    : out std_logic_vector(4 downto 0);
+        rob_id1_out         : out std_logic_vector(3 downto 0);
+        
+        arch_dest1          : out std_logic_vector(2 downto 0);
+        
+        out_pred_taken1      : out std_logic;
+        out_pred_target1     : out std_logic_vector(15 downto 0);
+        
+        -- Slot 2 Bundle
+        dispatch_valid2_out : out std_logic;
+        pc2_out             : out std_logic_vector(15 downto 0);
+        op2_out             : out std_logic_vector(3 downto 0);
+        imm2_out            : out std_logic_vector(15 downto 0);
+        comp_bit2_out       : out std_logic;
+        cz_bits2_out        : out std_logic_vector(1 downto 0);
+
+        reads_rs1_2_out     : out std_logic;
+        reads_rs2_2_out     : out std_logic;
+        dest_is_r0_2_out    : out std_logic;
+        we_gpr2_out         : out std_logic;
+        we_flag2_out        : out std_logic;
+
+        is_alu2_out         : out std_logic;
+        is_lsu2_out         : out std_logic;
+        is_branch2_out      : out std_logic;
+        is_multimem2_out    : out std_logic;
+        is_store2_out       : out std_logic;
+        illegal_op2_out     : out std_logic;
+
+        prs2_out, prt2_out  : out std_logic_vector(4 downto 0);
+        prs2_rdy, prt2_rdy  : out std_logic;
+        pr_flag2_out        : out std_logic_vector(4 downto 0);
+        pr_flag2_rdy        : out std_logic;
+        pd2_new, pd2_old    : out std_logic_vector(4 downto 0); 
+        pf2_new, pf2_old    : out std_logic_vector(4 downto 0);
+        rob_id2_out         : out std_logic_vector(3 downto 0);
+        
+        arch_dest2          : out std_logic_vector(2 downto 0);
+        
+        out_pred_taken2      : out std_logic;
+        out_pred_target2     : out std_logic_vector(15 downto 0);
+        
+        gpr_busy_out  : out std_logic_vector(31 downto 0);
+        flag_busy_out : out std_logic_vector(31 downto 0)
     );
 end RR_stage;
 
-architecture Behavioral of RR_stage is
+architecture Structural of RR_stage is
 
-    signal inst1_writes_reg, inst2_writes_reg : std_logic;
-    signal we_flag1_s, we_flag2_s : std_logic;
+    signal alloc_gpr1, alloc_gpr2 : std_logic_vector(4 downto 0);
+    signal alloc_f1, alloc_f2     : std_logic_vector(4 downto 0);
     
-    signal req_gpr1_s, req_flag1_s : std_logic;
-    signal req_gpr2_s, req_flag2_s : std_logic;
+    signal req_gpr1, req_gpr2 : std_logic;
+    signal req_f1, req_f2     : std_logic;
     
-    signal we_gpr1_rat, we_flag1_rat : std_logic;
-    signal we_gpr2_rat, we_flag2_rat : std_logic;
+    signal needed_gprs, needed_flags, needed_robs : unsigned(1 downto 0);
+    signal avail_gprs, avail_flags : unsigned(1 downto 0);
     
-    signal free_gpr1_s, free_flag1_s : std_logic_vector(4 downto 0);
-    signal free_gpr2_s, free_flag2_s : std_logic_vector(4 downto 0);
-    signal empty_stall_s : std_logic;
+    signal dispatch_fire : std_logic;
+    signal dispatch_gpr1, dispatch_gpr2, dispatch_f1, dispatch_f2 : std_logic;
 
-    -- Combinational RAT outputs
-    signal p_rb1_s, p_rc1_s, pr_flag1_s, old_p_ra1_s, old_pr_flag1_s : std_logic_vector(4 downto 0);
-    signal p_rb2_s, p_rc2_s, pr_flag2_s, old_p_ra2_s, old_pr_flag2_s : std_logic_vector(4 downto 0);
+    signal prs1_sig, prt1_sig, pr_flag1_sig : std_logic_vector(4 downto 0);
+    signal prs2_sig, prt2_sig, pr_flag2_sig : std_logic_vector(4 downto 0);
 
-    -- ==============================================================
-    -- LATCH REGISTERS (Synchronizes outputs for Dispatch Stage)
-    -- ==============================================================
-    signal val1_reg, val2_reg : std_logic;
-    signal op1_reg, op2_reg : std_logic_vector(3 downto 0);
-    signal we_f1_reg, we_f2_reg : std_logic;
+    signal real_valid_1, real_valid_2 : std_logic;
     
-    signal p_ra1_reg, p_flag1_dest_reg, p_rb1_reg, p_rc1_reg, pr_flag1_reg, old_ra1_reg, old_f1_reg : std_logic_vector(4 downto 0);
-    signal p_ra2_reg, p_flag2_dest_reg, p_rb2_reg, p_rc2_reg, pr_flag2_reg, old_ra2_reg, old_f2_reg : std_logic_vector(4 downto 0);
-
 begin
 
-    -- 1. Intentions & Requests
-    inst1_writes_reg <= '1' when (valid1_in = '1' and (op1_in = "0001" or op1_in = "0010" or op1_in = "0100" or op1_in = "0011")) else '0';
-    inst2_writes_reg <= '1' when (valid2_in = '1' and (op2_in = "0001" or op2_in = "0010" or op2_in = "0100" or op2_in = "0011")) else '0';
+    -- 1. THE FORTRESS FILTER: Only allow actual execution instructions to exist!
+    real_valid_1 <= op1_valid_in and (is_alu1_in or is_lsu1_in or is_branch1_in) and not illegal_op1_in;
+    real_valid_2 <= op2_valid_in and (is_alu2_in or is_lsu2_in or is_branch2_in) and not illegal_op2_in;
 
-    we_flag1_s <= '1' when (valid1_in = '1' and (op1_in = "0001" or op1_in = "0010" or cz1_in = "11")) else '0';
-    we_flag2_s <= '1' when (valid2_in = '1' and (op2_in = "0001" or op2_in = "0010" or cz2_in = "11")) else '0';
+    -- STRICT VALIDITY GATING (Using the filtered signals)
+    req_gpr1 <= '1' when (real_valid_1 = '1' and we_gpr1_in = '1') else '0';
+    req_gpr2 <= '1' when (real_valid_2 = '1' and we_gpr2_in = '1') else '0';
+    req_f1   <= '1' when (real_valid_1 = '1' and we_flag1_in = '1') else '0';
+    req_f2   <= '1' when (real_valid_2 = '1' and we_flag2_in = '1') else '0';
 
-    req_gpr1_s  <= inst1_writes_reg and not flush;
-    req_flag1_s <= we_flag1_s and not flush;
-    req_gpr2_s  <= inst2_writes_reg and not flush;
-    req_flag2_s <= we_flag2_s and not flush;
+    -- 2. RESOURCE COUNTING (BOMBPROOF SAFE LOGIC)
+    process(req_gpr1, req_gpr2)
+    begin
+        if req_gpr1 = '1' and req_gpr2 = '1' then needed_gprs <= "10";
+        elsif req_gpr1 = '1' or req_gpr2 = '1' then needed_gprs <= "01";
+        else needed_gprs <= "00";
+        end if;
+    end process;
+
+    process(req_f1, req_f2)
+    begin
+        if req_f1 = '1' and req_f2 = '1' then needed_flags <= "10";
+        elsif req_f1 = '1' or req_f2 = '1' then needed_flags <= "01";
+        else needed_flags <= "00";
+        end if;
+    end process;
+
+    process(real_valid_1, real_valid_2)
+    begin
+        if real_valid_1 = '1' and real_valid_2 = '1' then needed_robs <= "10";
+        elsif real_valid_1 = '1' or real_valid_2 = '1' then needed_robs <= "01";
+        else needed_robs <= "00";
+        end if;
+    end process;
+
+    -- 2. RESOURCE COUNTING
+    needed_gprs  <= ("0" & req_gpr1) + ("0" & req_gpr2);
+    needed_flags <= ("0" & req_f1) + ("0" & req_f2);
+    needed_robs  <= ("0" & op1_valid_in) + ("0" & op2_valid_in);
+
+    -- 3. THE ATOMIC HANDSHAKE
+    process(needed_gprs, avail_gprs, needed_flags, avail_flags, needed_robs, rob_free_count, flush)
+    begin
+        if (flush = '0') and 
+           (avail_gprs >= needed_gprs) and 
+           (avail_flags >= needed_flags) and 
+           (rob_free_count >= needed_robs) then
+            dispatch_fire <= '1';
+        else
+            dispatch_fire <= '0';
+        end if;
+    end process;
+
+    stall_out <= not dispatch_fire;
+
+    -- 4. GATED DISPATCH SIGNALS
+    dispatch_gpr1 <= req_gpr1 and dispatch_fire;
+    dispatch_gpr2 <= req_gpr2 and dispatch_fire;
+    dispatch_f1   <= req_f1 and dispatch_fire;
+    dispatch_f2   <= req_f2 and dispatch_fire;
+
+    -- =================================================================
+    -- PAYLOAD PASS-THROUGH TO DISPATCH/RS
+    -- =================================================================
+    -- Only output valid signals if the handshake succeeded AND it is a real instruction!
+    dispatch_valid1_out <= real_valid_1 and dispatch_fire;
+    dispatch_valid2_out <= real_valid_2 and dispatch_fire;
+
+    -- Slot 1 Payload Pass-Through
+    pc1_out          <= pc1_in;
+    op1_out          <= op1_in;
+    imm1_out         <= imm1_in;
+    comp_bit1_out    <= comp_bit1_in;
+    cz_bits1_out     <= cz_bits1_in;
     
-    rr_stall <= empty_stall_s;
+    reads_rs1_1_out  <= reads_rs1_1_in;
+    reads_rs2_1_out  <= reads_rs2_1_in;
+    dest_is_r0_1_out <= dest_is_r0_1_in;
+    we_gpr1_out      <= we_gpr1_in;
+    we_flag1_out     <= we_flag1_in;
+    
+    is_alu1_out      <= is_alu1_in;
+    is_lsu1_out      <= is_lsu1_in;
+    is_branch1_out   <= is_branch1_in;
+    is_multimem1_out <= is_multimem1_in;
+    is_store1_out    <= is_store1_in;
+    illegal_op1_out  <= illegal_op1_in;
+    rob_id1_out      <= rob_tail_id1_in;
+    
+    arch_dest1       <= dest_reg1_in;
+    
+    out_pred_taken1      <= in_pred_taken1;
+    out_pred_target1      <= in_pred_target1;
+    
+    -- Slot 2 Payload Pass-Through
+    pc2_out          <= pc2_in;
+    op2_out          <= op2_in;
+    imm2_out         <= imm2_in;
+    comp_bit2_out    <= comp_bit2_in;
+    cz_bits2_out     <= cz_bits2_in;
+    
+    reads_rs1_2_out  <= reads_rs1_2_in;
+    reads_rs2_2_out  <= reads_rs2_2_in;
+    dest_is_r0_2_out <= dest_is_r0_2_in;
+    we_gpr2_out      <= we_gpr2_in;
+    we_flag2_out     <= we_flag2_in;
 
-    -- 2. Modules
-    free_list_inst : entity work.free_list port map (
-        clk => clk, rst => rst, flush => flush, rrat_map_flat => rrat_map_flat,
-        req_gpr1 => req_gpr1_s, req_flag1 => req_flag1_s, req_gpr2 => req_gpr2_s, req_flag2 => req_flag2_s,
-        free_gpr1 => free_gpr1_s, free_flag1 => free_flag1_s, free_gpr2 => free_gpr2_s, free_flag2 => free_flag2_s,
-        empty_stall => empty_stall_s,
-        push_gpr1 => rob_push_gpr1, freed_gpr1 => rob_freed_gpr1, push_flag1 => rob_push_flag1, freed_flag1 => rob_freed_flag1,
-        push_gpr2 => rob_push_gpr2, freed_gpr2 => rob_freed_gpr2, push_flag2 => rob_push_flag2, freed_flag2 => rob_freed_flag2
-    );
+    is_alu2_out      <= is_alu2_in;
+    is_lsu2_out      <= is_lsu2_in;
+    is_branch2_out   <= is_branch2_in;
+    is_multimem2_out <= is_multimem2_in;
+    is_store2_out    <= is_store2_in;
+    illegal_op2_out  <= illegal_op2_in;
+    rob_id2_out      <= rob_tail_id2_in;
+    
+    arch_dest2       <= dest_reg2_in;
+    
+    out_pred_taken2      <= in_pred_taken2;
+    out_pred_target2      <= in_pred_target2;    
+    -- =================================================================
+    -- INSTANTIATIONS (Mapped to src/dest registers)
+    -- =================================================================
+    FL_inst : entity work.free_list
+        port map (
+            clk => clk, rst => rst, flush => flush,
+            commit_gpr_mask => commit_gpr_mask, commit_flag_mask => commit_flag_mask,
+            req_gpr1 => dispatch_gpr1, req_gpr2 => dispatch_gpr2,
+            alloc_gpr1 => alloc_gpr1, alloc_gpr2 => alloc_gpr2, avail_gprs => avail_gprs,
+            req_flag1 => dispatch_f1, req_flag2 => dispatch_f2,
+            alloc_flag1 => alloc_f1, alloc_flag2 => alloc_f2, avail_flags => avail_flags,
+            free_gpr1_en => free_gpr1_en, free_gpr1_tag => free_gpr1_tag,
+            free_gpr2_en => free_gpr2_en, free_gpr2_tag => free_gpr2_tag,
+            free_flag1_en => free_f1_en, free_flag1_tag => free_f1_tag,
+            free_flag2_en => free_f2_en, free_flag2_tag => free_f2_tag
+        );
 
-    we_gpr1_rat  <= req_gpr1_s and not empty_stall_s;
-    we_flag1_rat <= req_flag1_s and not empty_stall_s;
-    we_gpr2_rat  <= req_gpr2_s and not empty_stall_s;
-    we_flag2_rat <= req_flag2_s and not empty_stall_s;
+    RAT_inst : entity work.spec_rat
+        port map (
+            clk => clk, rst => rst, flush => flush,
+            commit_rat_flat => commit_rat_flat, commit_flag_tag => commit_flag_tag,
+            
+            rs1 => src1_reg1_in, rt1 => src2_reg1_in, rd1 => dest_reg1_in,
+            we_gpr1 => dispatch_gpr1, we_flag1 => dispatch_f1,
+            alloc_gpr1 => alloc_gpr1, alloc_f1 => alloc_f1,
+            prs1 => prs1_sig, prt1 => prt1_sig, old_pr1 => pd1_old,
+            pr_flag1 => pr_flag1_sig, old_pr_flag1 => pf1_old, 
+            
+            rs2 => src1_reg2_in, rt2 => src2_reg2_in, rd2 => dest_reg2_in,
+            we_gpr2 => dispatch_gpr2, we_flag2 => dispatch_f2,
+            alloc_gpr2 => alloc_gpr2, alloc_f2 => alloc_f2,
+            prs2 => prs2_sig, prt2 => prt2_sig, old_pr2 => pd2_old,
+            pr_flag2 => pr_flag2_sig, old_pr_flag2 => pf2_old  
+        );
 
-    rat_inst : entity work.RAT port map (
-        clk => clk, rst => rst, flush => flush, rrat_map_flat => rrat_map_flat,
-        rs1 => rb1_in, rt1 => rc1_in, rs2 => rb2_in, rt2 => rc2_in, rd1 => ra1_in, rd2 => ra2_in,
-        route_rs2_from_inst1 => route_rs2, route_rt2_from_inst1 => route_rt2,
-        
-        prs1 => p_rb1_s, prt1 => p_rc1_s, prs2 => p_rb2_s, prt2 => p_rc2_s,
-        old_pr1 => old_p_ra1_s, old_pr2 => old_p_ra2_s,
-        pr_flag1 => pr_flag1_s, pr_flag2 => pr_flag2_s,
-        old_pr_flag1 => old_pr_flag1_s, old_pr_flag2 => old_pr_flag2_s,
-        
-        we1 => we_gpr1_rat, we_flag1 => we_flag1_rat, rd1_in => ra1_in, new_gpr1 => free_gpr1_s, new_flag1 => free_flag1_s,
-        we2 => we_gpr2_rat, we_flag2 => we_flag2_rat, rd2_in => ra2_in, new_gpr2 => free_gpr2_s, new_flag2 => free_flag2_s
-    );
+    BT_inst : entity work.busy_table
+        port map (
+            clk => clk, rst => rst, flush => flush,
+            prs1 => prs1_sig, prt1 => prt1_sig, pr_flag1 => pr_flag1_sig,
+            prs2 => prs2_sig, prt2 => prt2_sig, pr_flag2 => pr_flag2_sig,
+            
+            prs1_ready => prs1_rdy, prt1_ready => prt1_rdy, pr_flag1_ready => pr_flag1_rdy, 
+            prs2_ready => prs2_rdy, prt2_ready => prt2_rdy, pr_flag2_ready => pr_flag2_rdy, 
+            
+            gpr_busy_out  => gpr_busy_out,
+            flag_busy_out => flag_busy_out,
+            
+            alloc_gpr1_en => dispatch_gpr1, alloc_gpr1 => alloc_gpr1,
+            alloc_gpr2_en => dispatch_gpr2, alloc_gpr2 => alloc_gpr2,
+            alloc_f1_en => dispatch_f1, alloc_f1 => alloc_f1,
+            alloc_f2_en => dispatch_f2, alloc_f2 => alloc_f2,
+            
+            wb_gpr1_en => wb_gpr1_en, wb_gpr1_tag => wb_gpr1_tag,
+            wb_gpr2_en => wb_gpr2_en, wb_gpr2_tag => wb_gpr2_tag,
+            wb_gpr3_en => wb_gpr3_en, wb_gpr3_tag => wb_gpr3_tag,
+            wb_f1_en => wb_f1_en, wb_f1_tag => wb_f1_tag,
+            wb_f2_en => wb_f2_en, wb_f2_tag => wb_f2_tag
+        );
 
-    -- 3. Pipeline Register (Captures allocations BEFORE the Free List head advances)
-    process(clk, rst)
+    prs1_out <= prs1_sig;
+    prt1_out <= prt1_sig;
+    pr_flag1_out <= pr_flag1_sig;
+    pd1_new  <= alloc_gpr1; 
+    pf1_new  <= alloc_f1;
+
+    prs2_out <= prs2_sig;
+    prt2_out <= prt2_sig;
+    pr_flag2_out <= pr_flag2_sig;
+    pd2_new  <= alloc_gpr2;
+    pf2_new  <= alloc_f2;
+    
+--    -- =================================================================
+--    -- SILICON X-RAY: What is the Atomic Handshake seeing?
+--    -- =================================================================
+--    process(clk)
+--    begin
+--        if rising_edge(clk) then
+--            if rst = '0' then
+--                report "--- RENAME STAGE DEBUG ---" & integer'image(0) &
+--                       " | Flush: " & std_logic'image(flush) & 
+--                       " | AvailGPR: " & integer'image(to_integer(avail_gprs)) & 
+--                       " | NeedGPR: " & integer'image(to_integer(needed_gprs)) & 
+--                       " | AvailFLG: " & integer'image(to_integer(avail_flags)) & 
+--                       " | NeedFLG: " & integer'image(to_integer(needed_flags)) & 
+--                       " | FreeROB: " & integer'image(to_integer(rob_free_count)) & 
+--                       " | NeedROB: " & integer'image(to_integer(needed_robs));
+--            end if;
+--        end if;
+--    end process;
+    -- =================================================================
+    -- X-RAY 5: RR STAGE INPUTS (What did the Decoder send us?)
+    -- =================================================================
+    process(clk)
     begin
-        if rst = '1' then
-            val1_reg <= '0'; val2_reg <= '0';
-        elsif rising_edge(clk) then
-            if flush = '1' then
-                val1_reg <= '0'; val2_reg <= '0';
-            elsif empty_stall_s = '0' then
-                val1_reg <= valid1_in; val2_reg <= valid2_in;
-                op1_reg <= op1_in; op2_reg <= op2_in;
-                we_f1_reg <= we_flag1_s; we_f2_reg <= we_flag2_s;
-                
-                -- Capture the exact tags generated this cycle
-                p_ra1_reg <= free_gpr1_s; p_flag1_dest_reg <= free_flag1_s;
-                p_rb1_reg <= p_rb1_s; p_rc1_reg <= p_rc1_s; pr_flag1_reg <= pr_flag1_s;
-                old_ra1_reg <= old_p_ra1_s; old_f1_reg <= old_pr_flag1_s;
-                
-                p_ra2_reg <= free_gpr2_s; p_flag2_dest_reg <= free_flag2_s;
-                p_rb2_reg <= p_rb2_s; p_rc2_reg <= p_rc2_s; pr_flag2_reg <= pr_flag2_s;
-                old_ra2_reg <= old_p_ra2_s; old_f2_reg <= old_pr_flag2_s;
+        if rising_edge(clk) then
+            if rst = '0' then
+                if op1_valid_in = '1' then
+                    report "[X-RAY RR 1] PC: " & integer'image(to_integer(unsigned(pc1_in))) & 
+                           " | OP: " & integer'image(to_integer(unsigned(op1_in))) & 
+                           " | SRC1 (Arch): " & integer'image(to_integer(unsigned(src1_reg1_in))) & 
+                           " | SRC2 (Arch): " & integer'image(to_integer(unsigned(src2_reg1_in))) & 
+                           " | DEST (Arch): " & integer'image(to_integer(unsigned(dest_reg1_in)));
+                end if;
+                if op2_valid_in = '1' then
+                    report "[X-RAY RR 2] PC: " & integer'image(to_integer(unsigned(pc2_in))) & 
+                           " | OP: " & integer'image(to_integer(unsigned(op2_in))) & 
+                           " | SRC1 (Arch): " & integer'image(to_integer(unsigned(src1_reg2_in))) & 
+                           " | SRC2 (Arch): " & integer'image(to_integer(unsigned(src2_reg2_in))) & 
+                           " | DEST (Arch): " & integer'image(to_integer(unsigned(dest_reg2_in)));
+                end if;
             end if;
         end if;
     end process;
-
-    -- Drive registered outputs
-    valid1_out <= val1_reg; op1_out <= op1_reg; we_flag1_out <= we_f1_reg;
-    p_ra1 <= p_ra1_reg; p_flag1_dest <= p_flag1_dest_reg; p_rb1 <= p_rb1_reg; p_rc1 <= p_rc1_reg; 
-    pr_flag1 <= pr_flag1_reg; old_p_ra1 <= old_ra1_reg; old_pr_flag1 <= old_f1_reg;
-
-    valid2_out <= val2_reg; op2_out <= op2_reg; we_flag2_out <= we_f2_reg;
-    p_ra2 <= p_ra2_reg; p_flag2_dest <= p_flag2_dest_reg; p_rb2 <= p_rb2_reg; p_rc2 <= p_rc2_reg;
-    pr_flag2 <= pr_flag2_reg; old_p_ra2 <= old_ra2_reg; old_pr_flag2 <= old_f2_reg;
-
-    -- Un-renamed pass-throughs
-    imm1_out <= imm1_in; cz1_out <= cz1_in; comp1_out <= comp1_in; pc1_out <= pc1_in;
-    imm2_out <= imm2_in; cz2_out <= cz2_in; comp2_out <= comp2_in; pc2_out <= pc2_in;
-
-    -- =================================================================
-    -- SIMULATION DEBUG PRINTING (Now checks registered outputs!)
-    -- =================================================================
-    -- synthesis translate_off
-    process
-    begin
-        wait until rising_edge(clk);
-        wait for 1 ns;
-
-        if rst = '0' and (val1_reg = '1' or val2_reg = '1' or flush = '1') then
-            report "-------------------------------------------------------------";
-            report "TIME: " & time'image(now) & " | FLUSH: " & std_logic'image(flush);
-
-            if val1_reg = '1' then
-                report "  SLOT 1 | OP: " & integer'image(to_integer(unsigned(op1_reg))) &
-                       " | GPR_DEST: " & integer'image(to_integer(unsigned(p_ra1_reg))) &
-                       " | FLAG_DEST: " & integer'image(to_integer(unsigned(p_flag1_dest_reg))) &
-                       " | SRC1: " & integer'image(to_integer(unsigned(p_rb1_reg))) &
-                       " | SRC2: " & integer'image(to_integer(unsigned(p_rc1_reg))) &
-                       " | FLAG_SRC: " & integer'image(to_integer(unsigned(pr_flag1_reg)));
-            end if;
-
-            if val2_reg = '1' then
-                report "  SLOT 2 | OP: " & integer'image(to_integer(unsigned(op2_reg))) &
-                       " | GPR_DEST: " & integer'image(to_integer(unsigned(p_ra2_reg))) &
-                       " | FLAG_DEST: " & integer'image(to_integer(unsigned(p_flag2_dest_reg))) &
-                       " | SRC1: " & integer'image(to_integer(unsigned(p_rb2_reg))) &
-                       " | SRC2: " & integer'image(to_integer(unsigned(p_rc2_reg))) &
-                       " | FLAG_SRC: " & integer'image(to_integer(unsigned(pr_flag2_reg)));
-            end if;
-        end if;
-    end process;
-    -- synthesis translate_on
-
-end Behavioral;
+end Structural;

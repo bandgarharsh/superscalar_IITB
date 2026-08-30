@@ -1,0 +1,24 @@
+# Ignore everything by default
+*
+
+# Keep Git metadata
+!.gitignore
+
+# Keep project directories
+!branch_testing/
+!dummy_Experiment/
+!final_update/
+!load_testing/
+!superscaler/
+!superscaler_vhdl/
+
+# Keep Vivado source directories
+!*.srcs/
+!*.srcs/sources_1/
+!*.srcs/sources_1/new/
+
+# Keep source files inside sources_1/new
+!*.srcs/sources_1/new/*.vhd
+
+# Keep text files
+!*.txt

@@ -1,0 +1,475 @@
+Test 1
+
+0205
+0403
+1650
+0807
+1AE0
+2D48
+
+0205 -> ADI R1, R0, 5   (Independent)
+
+0403 -> ADI R2, R0, 3   (Independent)
+
+1650 -> ADA R3, R1, R2  (RAW Hazard: Waits for R1 and R2 -> R3 = 8)
+
+0807 -> ADI R4, R0, 7   (Independent: Should dispatch immediately)
+
+1AE0 -> ADA R5, R3, R4  (RAW Hazard: Waits for R3 -> R5 = 15)
+
+2D48 -> NDU R6, R5, R1  (RAW Hazard: Waits for R5 -> R6 = ~(15 AND 5) = -6)
+
+type expected_array_t is array (0 to 5) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0005", -- Commit 1: ADI R1 <- 5
+        1 => x"0003", -- Commit 2: ADI R2 <- 3
+        2 => x"0008", -- Commit 3: ADA R3 <- 8 (5+3)
+        3 => x"0007", -- Commit 4: ADI R4 <- 7
+        4 => x"000F", -- Commit 5: ADA R5 <- 15 (8+7)
+        5 => x"FFFA"  -- Commit 6: NDU R6 <- -6 (Bitwise NAND of 15 and 5)
+    );
+
+
+Test 2
+
+0205
+0400
+1650
+1A81
+1EB2
+1CD3
+
+0205 -> ADI R1, R0, 5  (Independent: R1 = 5)
+
+0400 -> ADI R2, R0, 0  (Independent: R2 = 0)
+
+1650 -> ADA R3, R1, R2 (R3 = 5 + 0 = 5. Sets Zero Flag = '0', Carry Flag = '0')
+
+1A81 -> ADZ R5, R1, R2 (Add if Zero: Since Zero Flag is '0', this should FAIL condition and not write R5!)
+
+1EB2 -> ADC R7, R1, R5 (Add if Carry: this should FAIL condition and not write R7! )
+
+1CD3 -> AWC R6, R1, R2 (Add with Carry and set flags: R6 = 5 + 0 + Carry(0) = 5)
+
+-- The exact values we expect the architecture to write back
+    type expected_array_t is array (0 to 3) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0005", -- Commit 1: ADI R1 <- 5
+        1 => x"0000", -- Commit 2: ADI R2 <- 0
+        2 => x"0005", -- Commit 3: ADA R3 <- 5
+                      -- [ADZ fails, ROB safely flushes]
+                      -- [ADC fails, ROB safely flushes]
+        3 => x"0005"  -- Commit 4: AWC R6 <- 5 (5 + 0 + C(0))
+    );
+
+
+Test 3 
+
+0205
+0403
+1850
+2E00
+1FC8
+1852
+1852
+1800
+1A51
+1A51
+2E00
+1FC8
+1C53
+1C54
+1E56
+1800
+1E56
+1E55
+1E55
+1C57
+
+0205 -> ADI R1, R0, 5
+
+0403 -> ADI R2, R0, 3
+
+1850 -> ADA R4, R1, R2 (Normal Add -> 8. Flags: C=0, Z=0)
+
+2E00 -> NDU R7, R0, R0 (Trick to get FFFF. Flags: Z=0, C preserved)
+
+1FC8 -> ADA R7, R7, R1 (FFFF + 5 = 10004 -> Result: 4. Flags: C=1, Z=0)
+
+1852 -> ADC R4, R1, R2 (PASSES because C=1. Result: 8. Flags: C=0, Z=0)
+
+1852 -> ADC R4, R1, R2 (FAILS because C is now 0)
+
+1800 -> ADA R4, R0, R0 (0 + 0 = 0. Flags: C=0, Z=1)
+
+1A51 -> ADZ R5, R1, R2 (PASSES because Z=1. Result: 8. Flags: C=0, Z=0)
+
+1A51 -> ADZ R5, R1, R2 (FAILS because Z is now 0)
+
+2E00 -> NDU R7, R0, R0 (Get FFFF)
+
+1FC8 -> ADA R7, R7, R1 (FFFF + 5 = 10004 -> Result: 4. Flags: C=1, Z=0)
+
+1C53 -> AWC R6, R1, R2 (5 + 3 + C(1) = 9. Flags: C=0, Z=0)
+
+1C54 -> ACA R6, R1, R2 (5 + FFFC = 10001 -> Result: 1. Flags: C=1, Z=0)
+
+1E56 -> ACC R7, R1, R2 (PASSES because C=1. Result: 1. Flags: C=1, Z=0)
+
+1800 -> ADA R4, R0, R0 (0 + 0 = 0. Flags: C=0, Z=1)
+
+1E56 -> ACC R7, R1, R2 (FAILS because C is now 0)
+
+1E55 -> ACZ R7, R1, R2 (PASSES because Z=1. 5 + FFFC = 10001 -> Result: 1. Flags: C=1, Z=0)
+
+1E55 -> ACZ R7, R1, R2 (FAILS because Z is now 0)
+
+1C57 -> ACW R6, R1, R2 (5 + FFFC + C(1) = 10002 -> Result: 2. Flags: C=1, Z=0)
+
+
+-- Change the number of commits to track
+    constant NUM_COMMITS : integer := 16;
+
+    -- The exact values we expect the architecture to write back
+    type expected_array_t is array (0 to 15) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0  => x"0005", -- Commit 1:  ADI R1 <- 5
+        1  => x"0003", -- Commit 2:  ADI R2 <- 3
+        2  => x"0008", -- Commit 3:  ADA R4 <- 8
+        3  => x"FFFF", -- Commit 4:  NDU R7 <- FFFF
+        4  => x"0004", -- Commit 5:  ADA R7 <- 4 (Sets Carry)
+        5  => x"0008", -- Commit 6:  ADC R4 <- 8 (Passes)
+                       -- [ADC Fails]
+        6  => x"0000", -- Commit 7:  ADA R4 <- 0 (Sets Zero)
+        7  => x"0008", -- Commit 8:  ADZ R5 <- 8 (Passes)
+                       -- [ADZ Fails]
+        8  => x"FFFF", -- Commit 9:  NDU R7 <- FFFF
+        9  => x"0004", -- Commit 10: ADA R7 <- 4 (Sets Carry)
+        10 => x"0009", -- Commit 11: AWC R6 <- 9 (5+3+1)
+        11 => x"0001", -- Commit 12: ACA R6 <- 1 (5+FFFC)
+        12 => x"0001", -- Commit 13: ACC R7 <- 1 (Passes)
+        13 => x"0000", -- Commit 14: ADA R4 <- 0 (Sets Zero, Clears C)
+                       -- [ACC Fails]
+        14 => x"0001", -- Commit 15: ACZ R7 <- 1 (Passes)
+                       -- [ACZ Fails]
+        15 => x"0002"  -- Commit 16: ACW R6 <- 2 (5+FFFC+1)
+    );
+
+
+
+Test 4 
+
+0214
+040F
+7060
+0200
+0400
+6060
+
+0214 -> ADI R1, R0, 20 (R1 = 20)
+
+040F -> ADI R2, R0, 15 (R2 = 15)
+
+7060 -> SM R0, {R1, R2} (Store R1 to RAM[R0+0], Store R2 to RAM[R0+1])
+
+0200 -> ADI R1, R0, 0 (Wipe R1 to 0)
+
+0400 -> ADI R2, R0, 0 (Wipe R2 to 0)
+
+6060 -> LM R0, {R1, R2} (Load RAM[R0+0] into R1, Load RAM[R0+1] into R2)
+
+
+type expected_array_t is array (0 to 5) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0014", -- Commit 1: ADI R1 <- 20
+        1 => x"000F", -- Commit 2: ADI R2 <- 15
+        2 => x"0000", -- Commit 3: ADI R1 <- 0  (Wipe R1)
+        3 => x"0000", -- Commit 4: ADI R2 <- 0  (Wipe R2)
+        4 => x"0014", -- Commit 5: Load R1 <- 20 (Restored by LM!)
+        5 => x"000F"  -- Commit 6: Load R2 <- 15 (Restored by LM!)
+    );
+
+
+Test 5
+
+0205  -- PC 0:  ADI R1, R0, 5     (R1 = 5)
+040A  -- PC 2:  ADI R2, R0, 10    (R2 = 10, Base Address)
+0600  -- PC 4:  ADI R3, R0, 0     (R3 = 0, Wipe R3)
+1800  -- PC 6:  ADA R4, R0, R0    (0+0=0. Sets Z Flag = 1)
+5145  -- PC 8:  SW  R1, R2, 5     (Store R1(5) -> RAM[10+5 = 15])
+4A85  -- PC 10: LW  R5, R2, 5     (Load RAM[15] -> R5. MUST FORWARD FROM SQ!)
+7500  -- PC 12: SMF R2, {flags}   (Store Flags -> RAM[10]. Z is currently 1)
+0803  -- PC 14: ADI R4, R0, 3     (Wipe Z flag in ALU! Z is now 0)
+1A49  -- PC 16: ADZ R5, R1, R1    (Should fail, Z is 0)
+6500  -- PC 18: LMF R2, {flags}   (Load Flags <- RAM[10]. Restores Z=1)
+1A49  -- PC 20: ADZ R5, R1, R1    (Should PASS! R5 = 5+5 = 10)
+4A8F  -- PC 22: LW  R5, R2, 15    (Load RAM[10+15=25]. Never written, should be 0. Sets Z flag!)
+1E4D  -- PC 24: ACZ R7, R1, R1    (Should pass because LW set Z=1. R7 = 5 + FFFA = FFFF)
+
+
+   type expected_array_t is array (0 to 8) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0005", -- Commit 1: ADI R1 <- 5
+        1 => x"000A", -- Commit 2: ADI R2 <- 10
+        2 => x"0000", -- Commit 3: ADI R3 <- 0
+        3 => x"0000", -- Commit 4: ADA R4 <- 0 (Sets Z Flag)
+                      -- [SW executes, no GPR commit]
+        4 => x"0005", -- Commit 5: LW  R5 <- 5 (FORWARDED from SQ!)
+                      -- [SMF executes, stores Z=1]
+        5 => x"0003", -- Commit 6: ADI R4 <- 3 (Destroys Z flag)
+                      -- [ADZ FAILS and flushes]
+                      -- [LMF executes, restores Z=1]
+        6 => x"000A", -- Commit 7: ADZ R5 <- 10 (Passes! 5+5)
+        7 => x"0000", -- Commit 8: LW  R5 <- 0 (Loads 0, SETS Z flag)
+        8 => x"FFFF"  -- Commit 9: ACZ R7 <- FFFF (Passes! 5 + FFFA)
+    );
+
+
+Test 6 
+
+020A  -- PC 0:  ADI R1, R0, 10    (R1 = 10)
+0414  -- PC 2:  ADI R2, R0, 20    (R2 = 20)
+0C0F  -- PC 4:  ADI R6, R0, 15    (R6 = 15, Base Address)
+7C00  -- PC 6:  SM  R6, {}        (EMPTY MASK)
+1800  -- PC 8:  ADA R4, R0, R0    (Sets Z Flag = 1)
+7D00  -- PC 10: SMF R6, {f}       (FLAG ONLY: Stores Z=1 to RAM[15])
+0803  -- PC 12: ADI R4, R0, 3     (Wipe Z flag in ALU! Z is now 0)
+6D00  -- PC 14: LMF R6, {f}       (FLAG ONLY: Restores Z=1 from RAM[15])
+1A01  -- PC 16: ADZ R5, R0, R0    (Should pass! R5 = 0. Proves Flag loaded)
+7D7F  -- PC 18: SMF R6, {R1-R7, f} (MASSIVE: Store to RAM[15..22])
+0200  -- PC 20: ADI R1, R0, 0     (Wipe R1)
+0400  -- PC 22: ADI R2, R0, 0     (Wipe R2)
+0600  -- PC 24: ADI R3, R0, 0     (Wipe R3 instead of Base R6!)
+6D7F  -- PC 26: LMF R6, {R1-R7, f} (MASSIVE: Restores all!)
+
+    -- The exact values we expect the architecture to write back
+    type expected_array_t is array (0 to 15) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0  => x"000A", -- Commit 1: ADI R1 <- 10
+        1  => x"0014", -- Commit 2: ADI R2 <- 20
+        2  => x"000F", -- Commit 3: ADI R6 <- 15 (Base)
+        3  => x"0000", -- Commit 4: ADA R4 <- 0  (Sets Z=1)
+                       -- [SM Empty] and [SMF Flag] execute (No GPR commits)
+        4  => x"0003", -- Commit 5: ADI R4 <- 3  (Sets Z=0)
+                       -- [LMF Flag] executes
+        5  => x"0000", -- Commit 6: ADZ R5 <- 0  (Passes because Z restored)
+                       -- [SMF Massive] executes
+        6  => x"0000", -- Commit 7: ADI R1 <- 0  (Wipe)
+        7  => x"0000", -- Commit 8: ADI R2 <- 0  (Wipe)
+        8  => x"0000", -- Commit 9: ADI R6 <- 0  (Wipe Base)
+        
+        -- THE MASSIVE 'LMF' BURST: Restores everything seamlessly!
+        9  => x"000A", -- Commit 10: LMF R1 <- 10
+        10 => x"0014", -- Commit 11: LMF R2 <- 20
+        11 => x"0000", -- Commit 12: LMF R3 <- 0  (Never initialized)
+        12 => x"0003", -- Commit 13: LMF R4 <- 3
+        13 => x"0000", -- Commit 14: LMF R5 <- 0
+        14 => x"000F", -- Commit 15: LMF R6 <- 15 (Overwrites Base successfully!)
+        15 => x"0000"  -- Commit 16: LMF R7 <- 0  (Never initialized)
+    );
+
+Test 7
+
+020A  -- PC 0:  ADI R1, R0, 10    (R1 = 10)
+0414  -- PC 2:  ADI R2, R0, 20    (R2 = 20)
+0C05  -- PC 4:  ADI R6, R0, 5     (R6 = 5, Base)
+7C60  -- PC 6:  SM  R6, {R1, R2}  (Store 10, 20 to RAM[5, 6]. Mask is 60!)
+
+020C  -- PC 8:  ADI R1, R0, 12    (R1 = 12)
+0418  -- PC 10: ADI R2, R0, 24    (R2 = 24)
+7C60  -- PC 12: SM  R6, {R1, R2}  (OVERWRITE HAZARD! Store 12, 24)
+
+6C60  -- PC 14: LM  R6, {R1, R2}  (FORWARD HAZARD! Instantly loads. Must steal from Store Queue!)
+1850  -- PC 16: ADA R4, R1, R2    (WAKEUP TEST! R4 = R1 + R2 = 12 + 24 = 36)
+
+
+-- The exact values we expect the architecture to write back for the Hazard Test
+    type expected_array_t is array (0 to 7) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"000A", -- Commit 1: ADI R1 <- 10
+        1 => x"0014", -- Commit 2: ADI R2 <- 20
+        2 => x"0005", -- Commit 3: ADI R6 <- 5 (Base Address)
+        3 => x"000C", -- Commit 4: ADI R1 <- 12
+        4 => x"0018", -- Commit 5: ADI R2 <- 24
+        5 => x"000C", -- Commit 6: LM R1 <- 12 (Forwarded successfully from newer store!)
+        6 => x"0018", -- Commit 7: LM R2 <- 24 (Forwarded successfully from newer store!)
+        7 => x"0024"  -- Commit 8: ADA R4 <- 36 (x24 in hex. WAKEUP SUCCESS!)
+    );
+
+
+Test 8
+
+0200  -- PC 0:  ADI R1, R0, 0    (R1 = 0. This is the zero we will store)
+0C05  -- PC 2:  ADI R6, R0, 5    (R6 = 5. Base Address)
+5380  -- PC 4:  SW  R1, R6, 0    (Store Word: RAM[5+0] <- R1)
+0405  -- PC 6:  ADI R2, R0, 5    (R2 = 5. This forces the ALU Z-flag to 0!)
+4380  -- PC 8:  LW  R1, R6, 0    (Load Word: R1 <- RAM[5]. LSU MUST evaluate this '0' and set Z=1!)
+1881  -- PC 10: ADZ R4, R2, R0   (R4 = R2 + R0 = 5. Will ONLY execute if Z=1!)
+
+-- The exact values we expect the architecture to write back for the Simple LW Flag Test
+    type expected_array_t is array (0 to 4) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0000", -- Commit 1: ADI R1 <- 0
+        1 => x"0005", -- Commit 2: ADI R6 <- 5
+                      -- [SW] executes, no GPR commit
+        2 => x"0005", -- Commit 3: ADI R2 <- 5 (Wipes Z to 0)
+        3 => x"0000", -- Commit 4: LW  R1 <- 0 (LSU Broadcasts Z-FLAG: '1')
+        4 => x"0005"  -- Commit 5: ADZ R4 <- 5 (x05 in hex. Executes successfully because Z=1!)
+    );
+
+Test 9
+
+0202  -- PC 0:  ADI R1, R0, 2    (R1 = 2. In binary, 2 is '10', which is C=1, Z=0)
+0C05  -- PC 2:  ADI R6, R0, 5    (R6 = 5, Base Address)
+5380  -- PC 4:  SW  R1, R6, 0    (Store Word: Write the '2' into RAM[5])
+0405  -- PC 6:  ADI R2, R0, 5    (R2 = 5. Wipes the ALU flags so we know it's clean)
+6D00  -- PC 8:  LMF R6, {f}      (Load the '2' from RAM[5]. LSU MUST broadcast C=1, Z=0!)
+1882  -- PC 10: ADC R4, R2, R0   (ADd if Carry! R4 = R2 + R0. Will ONLY execute if C=1!)
+
+-- The exact values we expect the architecture to write back for the Carry Flag Test
+    type expected_array_t is array (0 to 3) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0002", -- Commit 1: ADI R1 <- 2
+        1 => x"0005", -- Commit 2: ADI R6 <- 5
+                      -- [SW] executes, writes '2' to RAM[5] (No GPR commit)
+        2 => x"0005", -- Commit 3: ADI R2 <- 5 (Wipes ALU flags)
+                      -- [LMF] executes, broadcasts C=1, Z=0 onto the CDB
+        3 => x"0005"  -- Commit 4: ADC R4 <- 5 (Executes successfully because C=1!)
+    );
+
+Test 10
+
+0205  -- PC 0:  ADI R1, R0, 5    (R1 = 5)
+0405  -- PC 2:  ADI R2, R0, 5    (R2 = 5)
+8282  -- PC 4:  BEQ R1, R2, +2   (R1 == R2, so TAKEN! Target = PC 4 + 2*2 = PC 8)
+060A  -- PC 6:  ADI R3, R0, 10   (SKIPPED! The ROB must flush this if mispredicted!)
+0A0A  -- PC 8:  ADI R5, R0, 10   (Branch Target! R5 = 10)
+8341  -- PC 10: BEQ R1, R5, +1   (5 == 10 is FALSE. NOT TAKEN! PC continues to 12)
+0C1E  -- PC 12: ADI R6, R0, 30   (EXECUTED! R6 = 30)
+
+-- The exact values we expect the architecture to write back for the BEQ Flush Test
+    type expected_array_t is array (0 to 3) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0005", -- Commit 1: ADI R1 <- 5
+        1 => x"0005", -- Commit 2: ADI R2 <- 5
+                      -- [BEQ] Executes. 5==5. TAKEN! (Flushes PC 6, Jumps to PC 8)
+        2 => x"000A", -- Commit 3: ADI R5 <- 10
+                      -- [BEQ] Executes. 5==10. NOT TAKEN! (Continues to PC 12)
+        3 => x"001E"  -- Commit 4: ADI R6 <- 30 (x1E in hex)
+    );
+
+Test 11
+
+0205  -- PC 0:  ADI R1, R0, 5    (R1 = 5)
+040A  -- PC 2:  ADI R2, R0, 10   (R2 = 10)
+060A  -- PC 4:  ADI R3, R0, 10   (R3 = 10)
+
+9282  -- PC 6:  BLT R1, R2, +2   (5 < 10 is TRUE! Target = 6 + 2*2 = PC 10)
+080F  -- PC 8:  ADI R4, R0, 15   (SKIPPED! Flushed by BLT)
+
+A4C2  -- PC 10: BLE R2, R3, +2   (10 <= 10 is TRUE! Target = 10 + 2*2 = PC 14)
+080F  -- PC 12: ADI R4, R0, 15   (SKIPPED! Flushed by BLE)
+
+9442  -- PC 14: BLT R2, R1, +2   (10 < 5 is FALSE! Not Taken. Falls through to 16)
+A442  -- PC 16: BLE R2, R1, +2   (10 <= 5 is FALSE! Not Taken. Falls through to 18)
+
+0A14  -- PC 18: ADI R5, R0, 20   (SURVIVED! Executed. R5 = 20)
+
+-- The exact values we expect the architecture to write back for the BLT/BLE Test
+    type expected_array_t is array (0 to 3) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0005", -- Commit 1: ADI R1 <- 5
+        1 => x"000A", -- Commit 2: ADI R2 <- 10
+        2 => x"000A", -- Commit 3: ADI R3 <- 10
+                      -- BLT (Taken), BLE (Taken), BLT (Not Taken), BLE (Not Taken) execute!
+        3 => x"0014"  -- Commit 4: ADI R5 <- 20 (x14 in hex. SURVIVAL SUCCESS!)
+    );
+
+
+Test 12
+
+0210  -- PC 0:  ADI R1, R0, 16   (R1 = 16. We will JRI to this later!)
+040E  -- PC 2:  ADI R2, R0, 14   (R2 = 14. We will JLR to this later!)
+
+CA02  -- PC 4:  JAL R5, +2       (Jump to PC 4 + 2*2 = 8. Save PC 4 + 2 = 6 into R5!)
+080F  -- PC 6:  ADI R4, R0, 15   (SKIPPED! Flushed by JAL)
+
+DC80  -- PC 8:  JLR R6, R2       (Jump to R2 = 14. Save PC 8 + 2 = 10 into R6!)
+080F  -- PC 10: ADI R4, R0, 15   (SKIPPED! Flushed by JLR)
+080F  -- PC 12: ADI R4, R0, 15   (SKIPPED!)
+
+F200  -- PC 14: JRI R1, +0       (Jump to R1 = 16. Pure jump, no link.)
+0614  -- PC 16: ADI R3, R0, 20   (SURVIVED! Executed. R3 = 20)
+
+-- The exact values we expect the architecture to write back for the Jump/Link Test
+    type expected_array_t is array (0 to 4) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0010", -- Commit 1: ADI R1 <- 16 (x10 in hex)
+        1 => x"000E", -- Commit 2: ADI R2 <- 14 (x0E in hex)
+        2 => x"0006", -- Commit 3: JAL R5 <- 6  (The Return Address from PC 4!)
+        3 => x"000A", -- Commit 4: JLR R6 <- 10 (The Return Address from PC 8!)
+        4 => x"0014"  -- Commit 5: ADI R3 <- 20 (x14 in hex. SURVIVAL SUCCESS!)
+    );
+
+Test 13
+
+0205  -- PC 0:  ADI R1, R0, 5    (R1 = 5. Just a warmup)
+000A  -- PC 2:  ADI R0, R0, 10   (R0 = 10. THIS IS THE MAGIC JUMP TO PC 10!)
+040F  -- PC 4:  ADI R2, R0, 15   (SKIPPED! Caught in the flush)
+040F  -- PC 6:  ADI R2, R0, 15   (SKIPPED!)
+040F  -- PC 8:  ADI R2, R0, 15   (SKIPPED!)
+0614  -- PC 10: ADI R3, R0, 20   (SURVIVED! Landing Zone. R3 = 20)
+
+-- The absolute final test: The R0 PC Jump!
+    type expected_array_t is array (0 to 2) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0 => x"0005", -- Commit 1: ADI R1 <- 5
+        1 => x"000A", -- Commit 2: ADI R0 <- 10 (ROB flushes and jumps!)
+        2 => x"001E"  -- Commit 3: ADI R3 <- 30 (x1E in hex. 10 + 20 = 30!)
+    );
+
+Test 14
+
+0C0A  -- PC 0:  ADI R6, R0, 10    (R6 = 10, Base Address)
+0205  -- PC 2:  ADI R1, R0, 5     (R1 = 5)
+0408  -- PC 4:  ADI R2, R0, 8     (R2 = 8)
+7C60  -- PC 6:  SM  R6, {R1, R2}  (Store 5, 8 to RAM[10, 11])
+
+6C60  -- PC 8:  LM  R6, {R1, R2}  (FORWARDING HAZARD! Bypasses RAM, loads 5 and 8)
+9442  -- PC 10: BLT R2, R1, +2    (8 < 5 is False. Branch Not Taken. Falls through)
+
+0200  -- PC 12: ADI R1, R0, 0     (R1 = 0)
+5380  -- PC 14: SW  R1, R6, 0     (Store Word: write 0 to RAM[10]. 5380 uses R6!)
+0405  -- PC 16: ADI R2, R0, 5     (R2 = 5, wipe Z flag to 0)
+
+4380  -- PC 18: LW  R1, R6, 0     (Load 0. LSU dynamically evaluates and sets Z=1! 4380 uses R6!)
+1881  -- PC 20: ADZ R4, R2, R0    (ADZ snoops the Z=1 flag and executes! R4 = 5)
+
+CA02  -- PC 22: JAL R5, +2        (Jump to PC 26. Save return address PC 24 into R5!)
+060F  -- PC 24: ADI R3, R0, 15    (SKIPPED BY JAL FLUSH!)
+
+001E  -- PC 26: ADI R0, R0, 30    (R0 = 30. Safe positive number! ROB Flushes!)
+060F  -- PC 28: ADI R3, R0, 15    (SKIPPED BY R0 FLUSH!)
+
+0614  -- PC 30: ADI R3, R0, 20    (LANDING ZONE! R3 = 50)
+
+
+-- The Ultimate Architecture Stress Test!
+    type expected_array_t is array (0 to 11) of std_logic_vector(15 downto 0);
+    constant EXPECTED_RESULTS : expected_array_t := (
+        0  => x"000A", -- Commit 1: ADI R6 <- 10
+        1  => x"0005", -- Commit 2: ADI R1 <- 5
+        2  => x"0008", -- Commit 3: ADI R2 <- 8
+                       -- [SM Executes]
+        3  => x"0005", -- Commit 4: LM R1 <- 5 (Forwarded!)
+        4  => x"0008", -- Commit 5: LM R2 <- 8 (Forwarded!)
+                       -- [BLT Executes - Not Taken]
+        5  => x"0000", -- Commit 6: ADI R1 <- 0
+                       -- [SW Executes]
+        6  => x"0005", -- Commit 7: ADI R2 <- 5
+        7  => x"0000", -- Commit 8: LW R1 <- 0 (LSU Broadcasts Z=1!)
+        8  => x"0005", -- Commit 9: ADZ R4 <- 5 (Executes on condition!)
+        9  => x"0018", -- Commit 10: JAL R5 <- 24 (x18 in hex. Return address saved!)
+        10 => x"001E", -- Commit 11: ADI R0 <- 30 (x1E in hex. R0 PC Jump Triggered!)
+        11 => x"0032"  -- Commit 12: ADI R3 <- 50 (x32 in hex. 30 + 20 = 50. LANDING ZONE!)
+    );

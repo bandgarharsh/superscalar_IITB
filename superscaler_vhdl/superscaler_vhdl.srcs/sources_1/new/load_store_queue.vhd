@@ -50,7 +50,7 @@ entity load_store_queue is
         issue_dest  : out std_logic_vector(4 downto 0);
         issue_rob   : out std_logic_vector(4 downto 0);
         
-        available_slots : out std_logic_vector(2 downto 0)
+        available_slots : out unsigned(2 downto 0)
   );
 end load_store_queue;
 
@@ -86,7 +86,7 @@ architecture Behavioral of load_store_queue is
     
 begin
 
-    available_slots <= std_logic_vector(to_unsigned(DEPTH - count, 3));
+    available_slots <= (to_unsigned(DEPTH - count, 3));
     
     head_ready <= '1' when (valid(head) = '1' and
                             base_v_val(head) = '1' and
